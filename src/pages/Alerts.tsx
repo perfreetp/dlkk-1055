@@ -1215,7 +1215,19 @@ const Alerts: React.FC = () => {
                           </span>
                         </div>
                       </div>
-                      <FileWarning className="w-5 h-5 text-accent shrink-0 mt-0.5" />
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <FileWarning className="w-5 h-5 text-accent mt-0.5" />
+                        <button
+                          onClick={() => {
+                            console.log("打开处置单:", relatedIncident.id);
+                            window.location.hash = "#/incidents";
+                          }}
+                          className="btn btn-secondary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          打开处置单
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

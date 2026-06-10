@@ -19,6 +19,7 @@ import {
   FileSpreadsheet,
   FileCode,
   MapPin,
+  ArrowLeft,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
 import {
@@ -60,6 +61,7 @@ const Reports: React.FC = () => {
     "environment",
   ]);
   const [exportStatus, setExportStatus] = useState<{ csv: boolean; html: boolean }>({ csv: false, html: false });
+  const [drillDownDate, setDrillDownDate] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const toggleTunnel = (id: string) => {
@@ -127,7 +129,7 @@ const Reports: React.FC = () => {
 
   const alertTrend = useMemo(() => {
     if (!hasSelectedTunnels) return [];
-    const arr: { time: string; values: Record<string, number> }[] = [];
+    const arr: { time: string; date: string; values: Record<string, number>; total: number }[] = [];
     const start = new Date(dateRange.start);
     const dayMap = new Map<string, { urgent: number; important: number; normal: number; info: number }>();
     for (let i = 0; i < dateRangeDays; i++) {
@@ -147,13 +149,34 @@ const Reports: React.FC = () => {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
       const dateKey = formatDate(d);
       const counts = dayMap.get(dateKey)!;
+      const total = counts.urgent + counts.important + counts.normal + counts.info;
       arr.push({
         time: `${d.getMonth() + 1}/${d.getDate()}`,
+        date: dateKey,
         values: counts,
+        total,
       });
     }
     return arr;
   }, [dateRange, dateRangeDays, filteredAlerts, hasSelectedTunnels]);
+
+  const drillDownAlerts = useMemo(() => {
+    if (!drillDownDate) return [];
+    return filteredAlerts.filter((a) => formatDate(new Date(a.createdAt)) === drillDownDate);
+  }, [filteredAlerts, drillDownDate]);
+
+  const drillDownAlertsByLevel = useMemo(() => {
+    const groups: Record<AlertLevel, typeof filteredAlerts> = {
+      [AlertLevel.URGENT]: [],
+      [AlertLevel.IMPORTANT]: [],
+      [AlertLevel.NORMAL]: [],
+      [AlertLevel.INFO]: [],
+    };
+    drillDownAlerts.forEach((a) => {
+      groups[a.level].push(a);
+    });
+    return groups;
+  }, [drillDownAlerts]);
 
   const envTrend = useMemo(() => {
     if (!hasSelectedTunnels) return [];
@@ -407,6 +430,22 @@ const Reports: React.FC = () => {
     });
     lines.push("");
 
+    if (drillDownDate) {
+      lines.push(`## 九、下钻明细（${drillDownDate}）`);
+      lines.push("告警ID,标题,等级,状态,所属隧道,设备,处置状态,产生时间");
+      drillDownAlerts.forEach((a) => {
+        const levelLabel = AlertLevelConfig[a.level].label;
+        const statusLabel = AlertStatusConfig[a.status].label;
+        const incidentStatus = a.relatedIncidentId ? "已关联处置单" : "未关联";
+        lines.push(
+          [a.id, a.title, levelLabel, statusLabel, a.tunnelName || "", a.deviceName, incidentStatus, a.createdAt]
+            .map((s) => `"${String(s).replace(/"/g, '""')}"`)
+            .join(",")
+        );
+      });
+      lines.push("");
+    }
+
     return "\uFEFF" + lines.join("\n");
   };
 
@@ -422,6 +461,73 @@ const Reports: React.FC = () => {
       const cfg = AlertLevelConfig[level];
       return statusBadge(cfg.label, cfg.color);
     };
+
+    const drillDownSection = (() => {
+      if (!drillDownDate) return "";
+      if (drillDownAlerts.length === 0) {
+        return `
+    <div class="section">
+      <div class="section-title">下钻明细（${drillDownDate}）</div>
+      <div class="empty-hint">${drillDownDate} 当天没有产生告警记录</div>
+    </div>`;
+      }
+      const levelOrder: AlertLevel[] = [AlertLevel.URGENT, AlertLevel.IMPORTANT, AlertLevel.NORMAL, AlertLevel.INFO];
+      const sections = levelOrder
+        .map((level) => {
+          const list = drillDownAlertsByLevel[level];
+          if (list.length === 0) return "";
+          const lvlCfg = AlertLevelConfig[level];
+          const rows = list
+            .map((a) => {
+              const stCfg = AlertStatusConfig[a.status];
+              const hasIncident = !!a.relatedIncidentId;
+              const incidentBadge = hasIncident
+                ? statusBadge("已关联处置单", "#00C853")
+                : `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;background:#f1f5f9;color:#6b7280;border:1px solid #e2e8f0;">未关联</span>`;
+              return `
+          <tr>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${a.id}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${a.title}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${levelBadge(a.level)}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${statusBadge(stCfg.label, stCfg.color)}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${a.tunnelName || "-"}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${a.deviceName}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${incidentBadge}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${a.createdAt}</td>
+          </tr>`;
+            })
+            .join("");
+          return `
+        <div style="margin-bottom:20px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;background:${lvlCfg.color};"></span>
+            <span style="font-size:14px;font-weight:600;color:${lvlCfg.color};">${lvlCfg.label}</span>
+            <span style="font-size:12px;color:#9ca3af;">(${list.length})</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align:left;font-size:12px;">告警ID</th>
+                <th style="text-align:left;font-size:12px;">标题</th>
+                <th style="text-align:left;font-size:12px;">等级</th>
+                <th style="text-align:left;font-size:12px;">状态</th>
+                <th style="text-align:left;font-size:12px;">所属隧道</th>
+                <th style="text-align:left;font-size:12px;">设备</th>
+                <th style="text-align:left;font-size:12px;">处置状态</th>
+                <th style="text-align:left;font-size:12px;">产生时间</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+        })
+        .join("");
+      return `
+    <div class="section">
+      <div class="section-title">下钻明细（${drillDownDate}）</div>
+      ${sections}
+    </div>`;
+    })();
 
     const alertRows = openAlertsSummary.oldestOpen
       .map(
@@ -576,6 +682,7 @@ const Reports: React.FC = () => {
         <tbody>${deviceRows}</tbody>
       </table>
     </div>
+    ${drillDownSection}
     `
         : `<div class="empty-hint" style="font-size:16px;padding:80px 20px;">⚠ 未选择任何隧道，请先选择隧道后再查看报表</div>`
     }
@@ -1046,20 +1153,189 @@ const Reports: React.FC = () => {
 
             <div className="grid grid-cols-12 gap-4">
               {selectedMetrics.includes("alerts") && (
-                <Card title="告警趋势（按等级）" corner accent className="col-span-7">
-                  {alertTrend.length > 0 ? (
-                    <BarChart
-                      categories={alertTrend.map((d) => d.time)}
-                      data={[
-                        { name: "紧急", values: alertTrend.map((d) => d.values.urgent), color: "#FF3B3B" },
-                        { name: "重要", values: alertTrend.map((d) => d.values.important), color: "#FF7A00" },
-                        { name: "一般", values: alertTrend.map((d) => d.values.normal), color: "#FFD600" },
-                        { name: "提示", values: alertTrend.map((d) => d.values.info), color: "#8FA4C7" },
-                      ]}
-                      height={260}
-                    />
+                <Card
+                  title={drillDownDate ? `告警明细 · ${drillDownDate}` : "告警趋势（按等级）"}
+                  corner
+                  accent
+                  className="col-span-12"
+                  actions={
+                    drillDownDate ? (
+                      <button
+                        onClick={() => setDrillDownDate(null)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-border bg-bg-elevated hover:bg-bg-card text-text-secondary hover:text-text-primary transition-colors"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5" />
+                        返回汇总
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-3 text-[11px] text-text-muted">
+                        <span>点击日期查看明细</span>
+                      </div>
+                    )
+                  }
+                >
+                  {!drillDownDate ? (
+                    <>
+                      {alertTrend.length > 0 && (
+                        <div className="mb-4">
+                          <div className="text-xs text-text-secondary mb-2 flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5" />
+                            日期下钻
+                          </div>
+                          <div className="flex gap-2 overflow-x-auto pb-1">
+                            {alertTrend.map((d) => {
+                              const isActive = drillDownDate === d.date;
+                              const hasAlerts = d.total > 0;
+                              return (
+                                <button
+                                  key={d.date}
+                                  onClick={() => setDrillDownDate(d.date)}
+                                  className={cn(
+                                    "shrink-0 flex flex-col items-center gap-1 px-3 py-2 rounded-lg border transition-all",
+                                    isActive
+                                      ? "bg-accent/15 border-accent/60"
+                                      : "bg-bg-elevated/50 border-border/50 hover:border-border-light hover:bg-bg-elevated",
+                                    !hasAlerts && "opacity-60"
+                                  )}
+                                  style={isActive ? { boxShadow: "0 0 0 1px rgba(0,212,255,0.3)" } : undefined}
+                                >
+                                  <span
+                                    className={cn(
+                                      "text-sm font-semibold font-number",
+                                      isActive ? "text-accent" : "text-text-primary"
+                                    )}
+                                  >
+                                    {d.time}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "text-[10px] px-1.5 py-px rounded font-number",
+                                      hasAlerts
+                                        ? isActive
+                                          ? "bg-accent/25 text-accent"
+                                          : "bg-warning/15 text-warning"
+                                        : "bg-bg-card text-text-muted"
+                                    )}
+                                  >
+                                    {d.total} 条
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {alertTrend.length > 0 ? (
+                        <BarChart
+                          categories={alertTrend.map((d) => d.time)}
+                          data={[
+                            { name: "紧急", values: alertTrend.map((d) => d.values.urgent), color: "#FF3B3B" },
+                            { name: "重要", values: alertTrend.map((d) => d.values.important), color: "#FF7A00" },
+                            { name: "一般", values: alertTrend.map((d) => d.values.normal), color: "#FFD600" },
+                            { name: "提示", values: alertTrend.map((d) => d.values.info), color: "#8FA4C7" },
+                          ]}
+                          height={260}
+                        />
+                      ) : (
+                        <EmptyState title="暂无告警趋势" hint="当前筛选条件下无数据" />
+                      )}
+                    </>
+                  ) : drillDownAlerts.length > 0 ? (
+                    <div className="space-y-4">
+                      {[AlertLevel.URGENT, AlertLevel.IMPORTANT, AlertLevel.NORMAL, AlertLevel.INFO].map(
+                        (level) => {
+                          const list = drillDownAlertsByLevel[level];
+                          if (list.length === 0) return null;
+                          const lvlCfg = AlertLevelConfig[level];
+                          return (
+                            <div key={level}>
+                              <div className="flex items-center gap-2 mb-2">
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                                  style={{ backgroundColor: lvlCfg.color }}
+                                />
+                                <span className="text-sm font-semibold" style={{ color: lvlCfg.color }}>
+                                  {lvlCfg.label}
+                                </span>
+                                <span className="text-xs text-text-muted font-number">({list.length})</span>
+                              </div>
+                              <div className="rounded-lg border border-border/50 overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="bg-bg-elevated/60 text-text-secondary text-xs">
+                                      <th className="text-left px-3 py-2 font-medium">告警ID</th>
+                                      <th className="text-left px-3 py-2 font-medium">标题</th>
+                                      <th className="text-left px-3 py-2 font-medium">等级</th>
+                                      <th className="text-left px-3 py-2 font-medium">状态</th>
+                                      <th className="text-left px-3 py-2 font-medium">所属隧道</th>
+                                      <th className="text-left px-3 py-2 font-medium">设备</th>
+                                      <th className="text-left px-3 py-2 font-medium">处置状态</th>
+                                      <th className="text-left px-3 py-2 font-medium">产生时间</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {list.map((a) => {
+                                      const stCfg = AlertStatusConfig[a.status];
+                                      const hasIncident = !!a.relatedIncidentId;
+                                      return (
+                                        <tr
+                                          key={a.id}
+                                          className="border-t border-border/30 hover:bg-bg-elevated/30 transition-colors"
+                                        >
+                                          <td className="px-3 py-2 font-number text-xs text-text-secondary">{a.id}</td>
+                                          <td className="px-3 py-2 text-text-primary">{a.title}</td>
+                                          <td className="px-3 py-2">
+                                            <span
+                                              className="text-[11px] px-1.5 py-px rounded"
+                                              style={{
+                                                backgroundColor: lvlCfg.color + "20",
+                                                color: lvlCfg.color,
+                                                border: `1px solid ${lvlCfg.color}40`,
+                                              }}
+                                            >
+                                              {lvlCfg.label}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2">
+                                            <span
+                                              className="text-[11px] px-1.5 py-px rounded"
+                                              style={{
+                                                backgroundColor: stCfg.color + "20",
+                                                color: stCfg.color,
+                                              }}
+                                            >
+                                              {stCfg.label}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-text-secondary text-xs">{a.tunnelName || "-"}</td>
+                                          <td className="px-3 py-2 text-text-secondary text-xs">{a.deviceName}</td>
+                                          <td className="px-3 py-2">
+                                            {hasIncident ? (
+                                              <span className="text-[11px] px-1.5 py-px rounded bg-success/15 text-success border border-success/40">
+                                                已关联处置单
+                                              </span>
+                                            ) : (
+                                              <span className="text-[11px] px-1.5 py-px rounded bg-bg-elevated text-text-muted border border-border/40">
+                                                未关联
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2 text-text-secondary text-xs font-number">
+                                            {a.createdAt}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        }
+                      )}
+                    </div>
                   ) : (
-                    <EmptyState title="暂无告警趋势" hint="当前筛选条件下无数据" />
+                    <EmptyState title="当日无告警" hint={`${drillDownDate} 当天没有产生告警记录`} />
                   )}
                 </Card>
               )}

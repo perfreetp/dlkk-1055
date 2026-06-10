@@ -107,13 +107,39 @@ export const useMonitorStore = create<MonitorState>()(
           })),
 
         closeAlert: (id) =>
-          set((s) => ({
-            alerts: s.alerts.map((a) =>
+          set((s) => {
+            const targetAlert = s.alerts.find((a) => a.id === id);
+            const updatedAlerts = s.alerts.map((a) =>
               a.id === id
                 ? { ...a, status: AlertStatus.CLOSED, closedAt: formatDateTime(new Date()) }
                 : a
-            ),
-          })),
+            );
+            let updatedIncidents = s.incidents;
+            if (targetAlert?.relatedIncidentId) {
+              updatedIncidents = s.incidents.map((inc) =>
+                inc.id === targetAlert.relatedIncidentId
+                  ? {
+                      ...inc,
+                      status: "closed" as const,
+                      phase: 4,
+                      timeline: [
+                        ...inc.timeline,
+                        {
+                          time: formatDateTime(new Date()),
+                          status: "验收闭环",
+                          operator: "系统",
+                          remark: "关联告警已闭环，自动同步关闭处置单",
+                        },
+                      ],
+                    }
+                  : inc
+              );
+            }
+            return {
+              alerts: updatedAlerts,
+              incidents: updatedIncidents,
+            };
+          }),
 
         batchConfirmAlerts: (ids, by) =>
           set((s) => ({
@@ -132,9 +158,19 @@ export const useMonitorStore = create<MonitorState>()(
         setSelectedTunnel: (tunnelId) => set({ selectedTunnelId: tunnelId }),
 
         createIncident: (data) => {
+          const relatedAlert = data.alertId
+            ? get().alerts.find((a) => a.id === data.alertId)
+            : undefined;
+          const sourceType: Incident["sourceType"] = data.alertId ? "alert" : "manual";
+
           const newIncident: Incident = {
             id: `inc-${Date.now()}`,
             code: data.code || `CZ-${Date.now()}`,
+            alertId: data.alertId,
+            tunnelId: data.tunnelId || relatedAlert?.tunnelId,
+            tunnelName: data.tunnelName || relatedAlert?.tunnelName,
+            deviceId: data.deviceId || relatedAlert?.deviceId,
+            deviceName: data.deviceName || relatedAlert?.deviceName,
             title: data.title || "未命名处置单",
             description: data.description || "",
             assignee: data.assignee || "",
@@ -148,12 +184,12 @@ export const useMonitorStore = create<MonitorState>()(
                 time: formatDateTime(new Date()),
                 status: "任务创建",
                 operator: "系统",
-                remark: data.alertId ? "由告警自动生成处置单" : undefined,
+                remark: data.alertId ? "由告警自动生成处置单" : "手工登记处置单",
               },
             ],
             feedbacks: [],
-            alertId: data.alertId,
             ...data,
+            sourceType,
           } as Incident;
 
           set((s) => {

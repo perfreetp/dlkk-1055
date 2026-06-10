@@ -18,6 +18,8 @@ import {
   AlertTriangle,
   Gauge,
   Users,
+  ExternalLink,
+  Handshake,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
 import { MOCK_STAFF, MOCK_TUNNELS } from "@/data/mockData";
@@ -53,7 +55,7 @@ const INCIDENT_STATUS_CONFIG: Record<
 
 const Incidents: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>("list");
-  const { incidents, createIncident, updateIncidentPhase, addFeedback, alerts } = useMonitorStore();
+  const { incidents, createIncident, updateIncidentPhase, addFeedback, alerts, devices } = useMonitorStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState<string | null>(null);
@@ -70,6 +72,8 @@ const Incidents: React.FC = () => {
     priority: AlertLevel.NORMAL as AlertLevel,
     deadline: "",
     alertId: "",
+    tunnelId: "",
+    deviceId: "",
   });
 
   useEffect(() => {
@@ -117,8 +121,34 @@ const Incidents: React.FC = () => {
     return alerts.filter((a) => !linkedAlertIds.has(a.id));
   }, [alerts, incidents]);
 
+  const availableDevices = useMemo(() => {
+    if (!newForm.tunnelId) return [];
+    return devices.filter((d) => d.tunnelId === newForm.tunnelId);
+  }, [devices, newForm.tunnelId]);
+
+  useEffect(() => {
+    if (newForm.alertId) {
+      const alert = alerts.find((a) => a.id === newForm.alertId);
+      if (alert) {
+        setNewForm((prev) => ({
+          ...prev,
+          tunnelId: alert.tunnelId,
+          deviceId: alert.deviceId,
+        }));
+      }
+    } else {
+      setNewForm((prev) => ({
+        ...prev,
+        tunnelId: "",
+        deviceId: "",
+      }));
+    }
+  }, [newForm.alertId, alerts]);
+
   const handleCreate = () => {
     if (!newForm.title || !newForm.assignee) return;
+    const tunnel = MOCK_TUNNELS.find((t) => t.id === newForm.tunnelId);
+    const device = devices.find((d) => d.id === newForm.deviceId);
     createIncident({
       title: newForm.title,
       description: newForm.description,
@@ -126,6 +156,10 @@ const Incidents: React.FC = () => {
       priority: newForm.priority,
       deadline: newForm.deadline || undefined,
       alertId: newForm.alertId || undefined,
+      tunnelId: newForm.tunnelId || undefined,
+      tunnelName: tunnel?.name,
+      deviceId: newForm.deviceId || undefined,
+      deviceName: device?.name,
     });
     setShowNewModal(false);
     setNewForm({
@@ -135,6 +169,8 @@ const Incidents: React.FC = () => {
       priority: AlertLevel.NORMAL,
       deadline: "",
       alertId: "",
+      tunnelId: "",
+      deviceId: "",
     });
   };
 
@@ -384,6 +420,40 @@ const Incidents: React.FC = () => {
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1.5">所属隧道</label>
+                  <select
+                    value={newForm.tunnelId}
+                    onChange={(e) => setNewForm({ ...newForm, tunnelId: e.target.value, deviceId: "" })}
+                    disabled={!!newForm.alertId}
+                    className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">请选择隧道</option>
+                    {MOCK_TUNNELS.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1.5">关联设备</label>
+                  <select
+                    value={newForm.deviceId}
+                    onChange={(e) => setNewForm({ ...newForm, deviceId: e.target.value })}
+                    disabled={!!newForm.alertId || !newForm.tunnelId}
+                    className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">请选择设备</option>
+                    {availableDevices.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm text-text-secondary mb-1.5">关联告警（可选）</label>
                 <select
@@ -561,6 +631,16 @@ const IncidentCard: React.FC<{
             <span
               className="badge border shrink-0"
               style={{
+                backgroundColor: incident.sourceType === "alert" ? "rgba(255, 59, 59, 0.15)" : "rgba(0, 212, 255, 0.15)",
+                borderColor: incident.sourceType === "alert" ? "rgba(255, 59, 59, 0.5)" : "rgba(0, 212, 255, 0.5)",
+                color: incident.sourceType === "alert" ? "#FF3B3B" : "#00D4FF",
+              }}
+            >
+              {incident.sourceType === "alert" ? "告警生成" : "手工登记"}
+            </span>
+            <span
+              className="badge border shrink-0"
+              style={{
                 backgroundColor: priorityCfg.color + "20",
                 borderColor: priorityCfg.color + "50",
                 color: priorityCfg.color,
@@ -632,6 +712,33 @@ const IncidentCard: React.FC<{
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {incident.alertId && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  console.log("跳转到告警:", incident.alertId);
+                  window.location.hash = "#/alerts";
+                }}
+                className="p-1.5 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
+                title="查看来源告警"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+              {relatedAlert && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    console.log("查看关联设备:", relatedAlert.deviceId);
+                  }}
+                  className="p-1.5 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
+                  title="查看关联设备"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </>
+          )}
           {canAdvance && (
             <button
               onClick={(e) => {
@@ -794,7 +901,7 @@ const IncidentCard: React.FC<{
 
 const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ incidents, nowTick }) => {
   const { alerts } = useMonitorStore();
-  const [groupDimension, setGroupDimension] = useState<"deadline" | "priority" | "assignee">("deadline");
+  const [groupDimension, setGroupDimension] = useState<"deadline" | "priority" | "assignee" | "handover">("deadline");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [tunnelFilter, setTunnelFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
@@ -803,7 +910,9 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
   const incidentTunnelMap = useMemo(() => {
     const map: Record<string, string> = {};
     incidents.forEach((inc) => {
-      if (inc.alertId) {
+      if (inc.tunnelId) {
+        map[inc.id] = inc.tunnelId;
+      } else if (inc.alertId) {
         const alert = alerts.find((a) => a.id === inc.alertId);
         if (alert) map[inc.id] = alert.tunnelId;
       }
@@ -901,10 +1010,46 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
     return s;
   }, [incidents]);
 
+  const handoverData = useMemo(() => {
+    const assigneeMap: Record<string, {
+      overdue: number;
+      within24h: number;
+      lastFeedbackTime: string | null;
+      incidents: Incident[];
+    }> = {};
+
+    filteredIncidents.forEach((inc) => {
+      const key = inc.assignee || "未分配";
+      if (!assigneeMap[key]) {
+        assigneeMap[key] = { overdue: 0, within24h: 0, lastFeedbackTime: null, incidents: [] };
+      }
+      const ds = getDeadlineStatus(inc.deadline);
+      if (ds === "overdue") assigneeMap[key].overdue++;
+      if (ds === "urgent" || ds === "warning") assigneeMap[key].within24h++;
+      if (inc.feedbacks.length > 0) {
+        const lastFb = inc.feedbacks[inc.feedbacks.length - 1].time;
+        if (!assigneeMap[key].lastFeedbackTime || lastFb > assigneeMap[key].lastFeedbackTime!) {
+          assigneeMap[key].lastFeedbackTime = lastFb;
+        }
+      }
+      assigneeMap[key].incidents.push(inc);
+    });
+
+    return Object.entries(assigneeMap).map(([name, data]) => {
+      const sorted = [...data.incidents].sort((a, b) => {
+        const dlA = getDeadlineStatus(a.deadline);
+        const dlB = getDeadlineStatus(b.deadline);
+        return DEADLINE_ORDER[dlA] - DEADLINE_ORDER[dlB];
+      });
+      return { name, ...data, topIncidents: sorted.slice(0, 5) };
+    });
+  }, [filteredIncidents, nowTick]);
+
   const dimensionTabs = [
     { key: "deadline" as const, label: "超期状态", icon: Clock },
     { key: "priority" as const, label: "紧急度", icon: Gauge },
     { key: "assignee" as const, label: "负责人", icon: Users },
+    { key: "handover" as const, label: "交接班视角", icon: Handshake },
   ];
 
   return (
@@ -1057,16 +1202,151 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
       </Card>
 
       <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
-        {groupOrder.length === 0 && (
-          <div className="h-full flex items-center justify-center text-text-muted text-sm">
-            暂无符合条件的处置单
-          </div>
-        )}
-        {groupOrder.map((groupKey) => {
-          const meta = getGroupMeta(groupKey);
-          const Icon = meta.icon;
-          const items = groupedData[groupKey];
-          const expanded = expandedGroups.has(groupKey) || expandedGroups.size === 0;
+        {groupDimension === "handover" ? (
+          <>
+            {handoverData.length === 0 && (
+              <div className="h-full flex items-center justify-center text-text-muted text-sm">
+                暂无符合条件的处置单
+              </div>
+            )}
+            {handoverData.map((item) => {
+              const expanded = expandedGroups.has(item.name) || expandedGroups.size === 0;
+              return (
+                <div key={item.name} className="rounded-lg border border-border overflow-hidden bg-bg-card/50">
+                  <button
+                    onClick={() => toggleGroup(item.name)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-bg-elevated/40 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center shrink-0"
+                      >
+                        <User className="w-5 h-5 text-accent" />
+                      </div>
+                      <div className="text-left">
+                        <div className="font-medium text-sm text-text-primary flex items-center gap-2">
+                          {item.name}
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full font-number bg-accent/15 text-accent"
+                          >
+                            {item.incidents.length}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1 text-[11px] text-text-muted">
+                          {item.overdue > 0 && (
+                            <span className="text-danger font-medium flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-danger alert-pulse" />
+                              超期 {item.overdue}
+                            </span>
+                          )}
+                          {item.within24h > 0 && (
+                            <span className="text-warning font-medium flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+                              24h内 {item.within24h}
+                            </span>
+                          )}
+                          {item.overdue === 0 && item.within24h === 0 && (
+                            <span className="text-success">暂无紧急任务</span>
+                          )}
+                          {item.lastFeedbackTime && (
+                            <span className="text-text-muted/70">
+                              最近反馈: {timeAgo(item.lastFeedbackTime)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    {expanded ? (
+                      <ChevronDown className="w-4 h-4 text-text-muted" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-text-muted" />
+                    )}
+                  </button>
+                  {expanded && (
+                    <div className="border-t border-border/40 space-y-2 p-3 bg-bg-primary/30">
+                      {item.topIncidents.map((inc) => {
+                        const priorityCfg = AlertLevelConfig[inc.priority];
+                        const deadlineStatus = getDeadlineStatus(inc.deadline);
+                        const deadlineCfg = DEADLINE_STATUS_CONFIG[deadlineStatus];
+                        const statusCfg = INCIDENT_STATUS_CONFIG[inc.status];
+                        return (
+                          <div
+                            key={inc.id}
+                            className="p-3 rounded-lg border border-border/50 bg-bg-card hover:border-border transition-colors"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm text-text-primary font-medium truncate">
+                                  {inc.title}
+                                </div>
+                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                  <span
+                                    className="badge text-[10px] py-0.5"
+                                    style={{
+                                      backgroundColor: priorityCfg.color + "15",
+                                      color: priorityCfg.color,
+                                    }}
+                                  >
+                                    <span
+                                      className={cn(
+                                        "w-1 h-1 rounded-full",
+                                        inc.priority === AlertLevel.URGENT && "alert-pulse"
+                                      )}
+                                      style={{ backgroundColor: priorityCfg.color }}
+                                    />
+                                    {priorityCfg.label}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "badge text-[10px] py-0.5",
+                                      deadlineStatus === "overdue" && "alert-pulse"
+                                    )}
+                                    style={{
+                                      backgroundColor: deadlineCfg.color + "15",
+                                      color: deadlineCfg.color,
+                                    }}
+                                  >
+                                    <Clock className="w-2.5 h-2.5" />
+                                    {formatCountdown(inc.deadline)}
+                                  </span>
+                                  <span
+                                    className="badge text-[10px] py-0.5"
+                                    style={{
+                                      backgroundColor: statusCfg.color + "15",
+                                      color: statusCfg.color,
+                                    }}
+                                  >
+                                    {statusCfg.label}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {item.incidents.length > 5 && (
+                        <div className="text-[11px] text-text-muted text-center pt-1">
+                          还有 {item.incidents.length - 5} 条更多任务
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        ) : (
+          <>
+            {groupOrder.length === 0 && (
+              <div className="h-full flex items-center justify-center text-text-muted text-sm">
+                暂无符合条件的处置单
+              </div>
+            )}
+            {groupOrder.map((groupKey) => {
+              const meta = getGroupMeta(groupKey);
+              const Icon = meta.icon;
+              const items = groupedData[groupKey];
+              const expanded = expandedGroups.has(groupKey) || expandedGroups.size === 0;
           return (
             <div key={groupKey} className="rounded-lg border border-border overflow-hidden bg-bg-card/50">
               <button
@@ -1117,6 +1397,8 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
             </div>
           );
         })}
+          </>
+        )}
       </div>
     </div>
   );
@@ -1164,6 +1446,15 @@ const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) =>
             <div className="flex items-center gap-2 flex-wrap mb-1.5">
               <span className="font-number text-xs text-accent/80">{incident.code}</span>
               <span className="text-sm font-medium text-text-primary truncate">{incident.title}</span>
+              <span
+                className="badge text-[10px] py-0.5"
+                style={{
+                  backgroundColor: incident.sourceType === "alert" ? "rgba(255, 59, 59, 0.15)" : "rgba(0, 212, 255, 0.15)",
+                  color: incident.sourceType === "alert" ? "#FF3B3B" : "#00D4FF",
+                }}
+              >
+                {incident.sourceType === "alert" ? "告警生成" : "手工登记"}
+              </span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <span
@@ -1211,6 +1502,31 @@ const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) =>
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {incident.alertId && (
+              <>
+                <button
+                  onClick={() => {
+                    console.log("跳转到告警:", incident.alertId);
+                    window.location.hash = "#/alerts";
+                  }}
+                  className="p-1 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
+                  title="查看来源告警"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+                {relatedAlert && (
+                  <button
+                    onClick={() => {
+                      console.log("查看关联设备:", relatedAlert.deviceId);
+                    }}
+                    className="p-1 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
+                    title="查看关联设备"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                  </button>
+                )}
+              </>
+            )}
             {canAdvance && (
               <button
                 onClick={() => updateIncidentPhase(incident.id)}

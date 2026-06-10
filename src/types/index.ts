@@ -83,10 +83,17 @@ export interface Alert {
   relatedIncidentId?: string;
 }
 
+export type IncidentSourceType = "alert" | "manual";
+
 export interface Incident {
   id: string;
   code: string;
   alertId?: string;
+  sourceType: IncidentSourceType;
+  tunnelId?: string;
+  tunnelName?: string;
+  deviceId?: string;
+  deviceName?: string;
   title: string;
   description: string;
   assignee: string;
