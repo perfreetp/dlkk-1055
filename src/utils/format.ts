@@ -158,3 +158,53 @@ export function randomId(prefix = "") {
 export function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+export type DeadlineStatus = "overdue" | "urgent" | "warning" | "normal";
+
+export function getDeadlineStatus(deadline: string): DeadlineStatus {
+  const now = Date.now();
+  const dl = new Date(deadline).getTime();
+  const diff = dl - now;
+  if (diff < 0) return "overdue";
+  if (diff < 1000 * 60 * 60) return "urgent";
+  if (diff < 1000 * 60 * 60 * 24) return "warning";
+  return "normal";
+}
+
+export function formatCountdown(deadline: string): string {
+  const now = Date.now();
+  const dl = new Date(deadline).getTime();
+  const diff = dl - now;
+  const absDiff = Math.abs(diff);
+  const days = Math.floor(absDiff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((absDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
+  const prefix = diff < 0 ? "超期 " : "剩余 ";
+  if (days > 0) return `${prefix}${days}天${hours}时${minutes}分`;
+  if (hours > 0) return `${prefix}${hours}时${minutes}分`;
+  return `${prefix}${minutes}分`;
+}
+
+export const DEADLINE_STATUS_CONFIG: Record<
+  DeadlineStatus,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  overdue: { label: "已超期", color: "#FF3B3B", bg: "bg-danger/15", border: "border-danger/50" },
+  urgent: { label: "1小时内", color: "#FF7A00", bg: "bg-warning/20", border: "border-warning/60" },
+  warning: { label: "24小时内", color: "#FFD600", bg: "bg-info/20", border: "border-info/60" },
+  normal: { label: "正常", color: "#00C853", bg: "bg-success/10", border: "border-success/40" },
+};
+
+export const PRIORITY_ORDER: Record<AlertLevel, number> = {
+  [AlertLevel.URGENT]: 0,
+  [AlertLevel.IMPORTANT]: 1,
+  [AlertLevel.NORMAL]: 2,
+  [AlertLevel.INFO]: 3,
+};
+
+export const DEADLINE_ORDER: Record<DeadlineStatus, number> = {
+  overdue: 0,
+  urgent: 1,
+  warning: 2,
+  normal: 3,
+};

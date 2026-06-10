@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   FileWarning,
   Clock,
@@ -12,18 +12,28 @@ import {
   MessageSquare,
   Send,
   ArrowRight,
-  AlertCircle,
-  CheckCircle2,
   X,
   Camera,
   Paperclip,
+  AlertTriangle,
+  Gauge,
+  Users,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
 import { MOCK_STAFF, MOCK_ALERTS } from "@/data/mockData";
 import Card from "@/components/common/Card";
-import DataNumber from "@/components/common/DataNumber";
 import StatusBadge from "@/components/common/StatusBadge";
-import { cn, formatDate, AlertLevelConfig, timeAgo, formatDateTime } from "@/utils/format";
+import {
+  cn,
+  AlertLevelConfig,
+  timeAgo,
+  getDeadlineStatus,
+  formatCountdown,
+  DEADLINE_STATUS_CONFIG,
+  PRIORITY_ORDER,
+  DEADLINE_ORDER,
+  DeadlineStatus,
+} from "@/utils/format";
 import { Incident, AlertLevel } from "@/types";
 
 type TabKey = "list" | "tracking";
@@ -51,6 +61,7 @@ const Incidents: React.FC = () => {
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [feedbackContent, setFeedbackContent] = useState("");
   const [feedbackReporter, setFeedbackReporter] = useState("");
+  const [nowTick, setNowTick] = useState(0);
   const [newForm, setNewForm] = useState({
     title: "",
     description: "",
@@ -58,6 +69,11 @@ const Incidents: React.FC = () => {
     priority: AlertLevel.NORMAL as AlertLevel,
     deadline: "",
   });
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick((t) => t + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const filteredIncidents = useMemo(() => {
     return incidents.filter((inc) => {
@@ -252,23 +268,29 @@ const Incidents: React.FC = () => {
           </Card>
         )}
 
-        <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
-          {displayList.map((inc) => (
-            <IncidentCard
-              key={inc.id}
-              incident={inc}
-              expanded={expandedId === inc.id}
-              onToggle={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
-              onAdvance={() => updateIncidentPhase(inc.id)}
-              onAddFeedback={() => setShowFeedbackModal(inc.id)}
-            />
-          ))}
-          {displayList.length === 0 && (
-            <div className="h-full flex items-center justify-center text-text-muted text-sm">
-              暂无符合条件的处置单
-            </div>
-          )}
-        </div>
+        {activeTab === "tracking" && (
+          <TrackingView incidents={unclosedIncidents} nowTick={nowTick} />
+        )}
+
+        {activeTab === "list" && (
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
+            {displayList.map((inc) => (
+              <IncidentCard
+                key={inc.id}
+                incident={inc}
+                expanded={expandedId === inc.id}
+                onToggle={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
+                onAdvance={() => updateIncidentPhase(inc.id)}
+                onAddFeedback={() => setShowFeedbackModal(inc.id)}
+              />
+            ))}
+            {displayList.length === 0 && (
+              <div className="h-full flex items-center justify-center text-text-muted text-sm">
+                暂无符合条件的处置单
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showNewModal && (
@@ -505,6 +527,8 @@ const IncidentCard: React.FC<{
   const priorityCfg = AlertLevelConfig[incident.priority];
   const progress = ((incident.phase - 1) / 3) * 100;
   const canAdvance = incident.phase < 4;
+  const deadlineStatus = getDeadlineStatus(incident.deadline);
+  const deadlineCfg = DEADLINE_STATUS_CONFIG[deadlineStatus];
 
   return (
     <Card corner accent className={cn("transition-all", expanded && "ring-1 ring-accent/30")}>
@@ -543,6 +567,17 @@ const IncidentCard: React.FC<{
               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: statusCfg.color }} />
               {statusCfg.label}
             </span>
+            {incident.deadline && (
+              <span
+                className={cn("badge border shrink-0", deadlineCfg.bg, deadlineCfg.border)}
+                style={{ color: deadlineCfg.color }}
+              >
+                <Clock
+                  className={cn("w-3 h-3", deadlineStatus === "overdue" && "alert-pulse")}
+                />
+                {formatCountdown(incident.deadline)}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-4 text-xs text-text-secondary flex-wrap">
             <span className="flex items-center gap-1">
@@ -553,12 +588,6 @@ const IncidentCard: React.FC<{
               <Calendar className="w-3 h-3" />
               创建于 {timeAgo(incident.createdAt)}
             </span>
-            {incident.deadline && (
-              <span className="flex items-center gap-1 text-warning">
-                <Clock className="w-3 h-3" />
-                期限 {incident.deadline}
-              </span>
-            )}
             <span className="flex items-center gap-1">
               <MessageSquare className="w-3 h-3" />
               {incident.feedbacks.length} 条反馈
@@ -713,6 +742,424 @@ const IncidentCard: React.FC<{
         </div>
       )}
     </Card>
+  );
+};
+
+const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ incidents, nowTick }) => {
+  const [groupDimension, setGroupDimension] = useState<"deadline" | "priority" | "assignee">("deadline");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const sortedIncidents = useMemo(() => {
+    return [...incidents].sort((a, b) => {
+      const dlA = getDeadlineStatus(a.deadline);
+      const dlB = getDeadlineStatus(b.deadline);
+      const dlDiff = DEADLINE_ORDER[dlA] - DEADLINE_ORDER[dlB];
+      if (dlDiff !== 0) return dlDiff;
+      const prDiff = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+      if (prDiff !== 0) return prDiff;
+      return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
+    });
+  }, [incidents, nowTick]);
+
+  const groupedData = useMemo(() => {
+    const groups: Record<string, Incident[]> = {};
+    sortedIncidents.forEach((inc) => {
+      let key: string;
+      if (groupDimension === "deadline") {
+        key = getDeadlineStatus(inc.deadline);
+      } else if (groupDimension === "priority") {
+        key = inc.priority;
+      } else {
+        key = inc.assignee || "未分配";
+      }
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(inc);
+    });
+    return groups;
+  }, [sortedIncidents, groupDimension]);
+
+  const groupOrder = useMemo(() => {
+    const keys = Object.keys(groupedData);
+    if (groupDimension === "deadline") {
+      return keys.sort((a, b) => DEADLINE_ORDER[a as DeadlineStatus] - DEADLINE_ORDER[b as DeadlineStatus]);
+    } else if (groupDimension === "priority") {
+      return keys.sort((a, b) => PRIORITY_ORDER[a as AlertLevel] - PRIORITY_ORDER[b as AlertLevel]);
+    }
+    return keys.sort();
+  }, [groupedData, groupDimension]);
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const getGroupMeta = (key: string) => {
+    if (groupDimension === "deadline") {
+      const cfg = DEADLINE_STATUS_CONFIG[key as DeadlineStatus];
+      return { label: cfg.label, color: cfg.color, icon: Clock };
+    } else if (groupDimension === "priority") {
+      const cfg = AlertLevelConfig[key as AlertLevel];
+      return { label: cfg.label, color: cfg.color, icon: AlertTriangle };
+    }
+    return { label: key, color: "#00D4FF", icon: Users };
+  };
+
+  const trackingStats = useMemo(() => {
+    const s = { overdue: 0, urgent: 0, warning: 0, normal: 0 };
+    incidents.forEach((i) => {
+      const st = getDeadlineStatus(i.deadline);
+      s[st]++;
+    });
+    return s;
+  }, [incidents]);
+
+  const dimensionTabs = [
+    { key: "deadline" as const, label: "超期状态", icon: Clock },
+    { key: "priority" as const, label: "紧急度", icon: Gauge },
+    { key: "assignee" as const, label: "负责人", icon: Users },
+  ];
+
+  return (
+    <div className="flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
+      <Card corner className="shrink-0">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="grid grid-cols-4 gap-4">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full alert-pulse"
+                style={{ backgroundColor: DEADLINE_STATUS_CONFIG.overdue.color }}
+              />
+              <div>
+                <div className="text-[10px] text-text-muted">已超期</div>
+                <div className="font-display text-lg font-bold" style={{ color: DEADLINE_STATUS_CONFIG.overdue.color }}>
+                  {trackingStats.overdue}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: DEADLINE_STATUS_CONFIG.urgent.color }}
+              />
+              <div>
+                <div className="text-[10px] text-text-muted">1小时内</div>
+                <div className="font-display text-lg font-bold" style={{ color: DEADLINE_STATUS_CONFIG.urgent.color }}>
+                  {trackingStats.urgent}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: DEADLINE_STATUS_CONFIG.warning.color }}
+              />
+              <div>
+                <div className="text-[10px] text-text-muted">24小时内</div>
+                <div className="font-display text-lg font-bold" style={{ color: DEADLINE_STATUS_CONFIG.warning.color }}>
+                  {trackingStats.warning}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: DEADLINE_STATUS_CONFIG.normal.color }}
+              />
+              <div>
+                <div className="text-[10px] text-text-muted">正常</div>
+                <div className="font-display text-lg font-bold" style={{ color: DEADLINE_STATUS_CONFIG.normal.color }}>
+                  {trackingStats.normal}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 bg-bg-elevated/60 rounded-lg border border-border p-1">
+            {dimensionTabs.map((tab) => {
+              const Icon = tab.icon;
+              const active = groupDimension === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setGroupDimension(tab.key)}
+                  className={cn(
+                    "px-4 py-1.5 text-xs rounded-md transition-all flex items-center gap-1.5",
+                    active
+                      ? "bg-accent/15 text-accent shadow-sm"
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-card/50"
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </Card>
+
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
+        {groupOrder.length === 0 && (
+          <div className="h-full flex items-center justify-center text-text-muted text-sm">
+            暂无未关闭处置单
+          </div>
+        )}
+        {groupOrder.map((groupKey) => {
+          const meta = getGroupMeta(groupKey);
+          const Icon = meta.icon;
+          const items = groupedData[groupKey];
+          const expanded = expandedGroups.has(groupKey) || expandedGroups.size === 0;
+          return (
+            <div key={groupKey} className="rounded-lg border border-border overflow-hidden bg-bg-card/50">
+              <button
+                onClick={() => toggleGroup(groupKey)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-bg-elevated/40 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-8 h-8 rounded-lg border flex items-center justify-center shrink-0"
+                    style={{
+                      backgroundColor: meta.color + "15",
+                      borderColor: meta.color + "40",
+                    }}
+                  >
+                    <Icon className="w-4 h-4" style={{ color: meta.color }} />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-medium text-sm text-text-primary flex items-center gap-2">
+                      {meta.label}
+                      <span
+                        className="text-[10px] px-2 py-0.5 rounded-full font-number"
+                        style={{
+                          backgroundColor: meta.color + "20",
+                          color: meta.color,
+                        }}
+                      >
+                        {items.length}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-text-muted mt-0.5">
+                      共 {items.length} 条待处理
+                    </div>
+                  </div>
+                </div>
+                {expanded ? (
+                  <ChevronDown className="w-4 h-4 text-text-muted" />
+                ) : (
+                  <ChevronRight className="w-4 h-4 text-text-muted" />
+                )}
+              </button>
+              {expanded && (
+                <div className="border-t border-border/40 space-y-2 p-3 bg-bg-primary/30">
+                  {items.map((inc) => (
+                    <TrackingIncidentItem key={inc.id} incident={inc} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) => {
+  const { updateIncidentPhase, addFeedback } = useMonitorStore();
+  const [expanded, setExpanded] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackContent, setFeedbackContent] = useState("");
+  const [feedbackReporter, setFeedbackReporter] = useState("");
+  const statusCfg = INCIDENT_STATUS_CONFIG[incident.status];
+  const priorityCfg = AlertLevelConfig[incident.priority];
+  const deadlineStatus = getDeadlineStatus(incident.deadline);
+  const deadlineCfg = DEADLINE_STATUS_CONFIG[deadlineStatus];
+  const progress = ((incident.phase - 1) / 3) * 100;
+  const canAdvance = incident.phase < 4;
+  const maintenanceStaff = MOCK_STAFF.filter((s) => s.role !== "duty");
+
+  const handleAddFeedback = () => {
+    if (!feedbackContent || !feedbackReporter) return;
+    addFeedback(incident.id, feedbackReporter, feedbackContent);
+    setShowFeedback(false);
+    setFeedbackContent("");
+    setFeedbackReporter("");
+  };
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border bg-bg-card transition-all",
+        deadlineStatus === "overdue"
+          ? "border-danger/40 shadow-[0_0_0_1px_rgba(255,59,59,0.1)]"
+          : "border-border/50 hover:border-border"
+      )}
+    >
+      <div className="p-3">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1.5">
+              <span className="font-number text-xs text-accent/80">{incident.code}</span>
+              <span className="text-sm font-medium text-text-primary truncate">{incident.title}</span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className="badge text-[10px] py-0.5"
+                style={{
+                  backgroundColor: priorityCfg.color + "15",
+                  color: priorityCfg.color,
+                }}
+              >
+                <span
+                  className={cn(
+                    "w-1 h-1 rounded-full",
+                    incident.priority === AlertLevel.URGENT && "alert-pulse"
+                  )}
+                  style={{ backgroundColor: priorityCfg.color }}
+                />
+                {priorityCfg.label}
+              </span>
+              <span
+                className="badge text-[10px] py-0.5"
+                style={{
+                  backgroundColor: statusCfg.color + "15",
+                  color: statusCfg.color,
+                }}
+              >
+                {statusCfg.label}
+              </span>
+              <span
+                className={cn("badge text-[10px] py-0.5", deadlineStatus === "overdue" && "alert-pulse")}
+                style={{
+                  backgroundColor: deadlineCfg.color + "15",
+                  color: deadlineCfg.color,
+                }}
+              >
+                <Clock className="w-2.5 h-2.5" />
+                {formatCountdown(incident.deadline)}
+              </span>
+              <span className="text-[10px] text-text-muted flex items-center gap-1">
+                <User className="w-2.5 h-2.5" />
+                {incident.assignee}
+              </span>
+              <span className="text-[10px] text-text-muted">
+                阶段 {incident.phase}/4 · {Math.round(progress)}%
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {canAdvance && (
+              <button
+                onClick={() => updateIncidentPhase(incident.id)}
+                className="px-2.5 py-1 text-[11px] rounded bg-accent/15 text-accent hover:bg-accent/25 transition-colors flex items-center gap-1"
+              >
+                <ArrowRight className="w-3 h-3" />
+                推进
+              </button>
+            )}
+            <button
+              onClick={() => setShowFeedback(!showFeedback)}
+              className="px-2.5 py-1 text-[11px] rounded bg-bg-elevated text-text-secondary hover:bg-bg-elevated/80 hover:text-text-primary transition-colors flex items-center gap-1"
+            >
+              <MessageSquare className="w-3 h-3" />
+              反馈
+            </button>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="p-1 rounded hover:bg-bg-elevated transition-colors text-text-muted"
+            >
+              {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2.5 h-1.5 rounded-full bg-border/40 overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: `${progress}%`,
+              background:
+                deadlineStatus === "overdue"
+                  ? "linear-gradient(90deg, #FF3B3B, #FF7A00)"
+                  : "linear-gradient(90deg, #00D4FF, #00C853)",
+            }}
+          />
+        </div>
+
+        {showFeedback && (
+          <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+            <div className="grid grid-cols-4 gap-2">
+              <select
+                value={feedbackReporter}
+                onChange={(e) => setFeedbackReporter(e.target.value)}
+                className="col-span-1 px-2 py-1.5 text-xs rounded bg-bg-elevated border border-border text-text-primary focus:outline-none focus:border-accent/50"
+              >
+                <option value="">反馈人</option>
+                {maintenanceStaff.map((s) => (
+                  <option key={s.id} value={s.name}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={feedbackContent}
+                onChange={(e) => setFeedbackContent(e.target.value)}
+                placeholder="输入反馈内容..."
+                className="col-span-2 px-2 py-1.5 text-xs rounded bg-bg-elevated border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50"
+              />
+              <button
+                onClick={handleAddFeedback}
+                disabled={!feedbackContent || !feedbackReporter}
+                className="col-span-1 px-2 py-1.5 text-xs rounded bg-accent text-bg-primary hover:bg-accent-dark transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+              >
+                <Send className="w-3 h-3" />
+                提交
+              </button>
+            </div>
+          </div>
+        )}
+
+        {expanded && (
+          <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+            {incident.description && (
+              <div className="text-xs text-text-secondary leading-relaxed">
+                <span className="text-text-muted">描述：</span>
+                {incident.description}
+              </div>
+            )}
+            <div className="flex items-center gap-4 text-[11px] text-text-muted">
+              <span className="flex items-center gap-1">
+                <Calendar className="w-2.5 h-2.5" />
+                创建 {timeAgo(incident.createdAt)}
+              </span>
+              <span className="flex items-center gap-1">
+                <MessageSquare className="w-2.5 h-2.5" />
+                {incident.feedbacks.length} 条反馈
+              </span>
+            </div>
+            {incident.feedbacks.length > 0 && (
+              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                {incident.feedbacks.slice(-3).map((fb) => (
+                  <div
+                    key={fb.id}
+                    className="p-2 rounded bg-bg-elevated/60 border border-border/30"
+                  >
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[11px] font-medium text-accent">{fb.reporter}</span>
+                      <span className="text-[10px] text-text-muted">{timeAgo(fb.time)}</span>
+                    </div>
+                    <p className="text-[11px] text-text-secondary leading-relaxed">{fb.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 

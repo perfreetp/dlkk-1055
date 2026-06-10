@@ -30,9 +30,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
-import { MOCK_MAINTENANCE_RECORDS } from "@/data/mockData";
 import Card from "@/components/common/Card";
-import DataNumber from "@/components/common/DataNumber";
 import StatusBadge from "@/components/common/StatusBadge";
 import { MiniTrend, TrendChart, GaugeChart } from "@/components/charts/Charts";
 import {
@@ -43,9 +41,9 @@ import {
   formatTime,
   timeAgo,
 } from "@/utils/format";
-import { DeviceStatus, DeviceType, DeviceMaintenanceRecord } from "@/types";
+import { DeviceStatus, DeviceType } from "@/types";
 
-const TYPE_ICON: Record<DeviceType, React.ComponentType<any>> = {
+const TYPE_ICON: Record<DeviceType, React.ComponentType<{ className?: string }>> = {
   [DeviceType.LIGHTING]: Lightbulb,
   [DeviceType.FAN]: Fan,
   [DeviceType.PUMP]: Droplets,
@@ -57,7 +55,7 @@ const TYPE_ICON: Record<DeviceType, React.ComponentType<any>> = {
 const DeviceDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
-  const { devices, alerts } = useMonitorStore();
+  const { devices, alerts, maintenanceRecords, createMaintenanceRecord } = useMonitorStore();
 
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [newMaintenance, setNewMaintenance] = useState({
@@ -66,7 +64,6 @@ const DeviceDetail: React.FC = () => {
     description: "",
     result: "",
   });
-  const [localRecords, setLocalRecords] = useState<DeviceMaintenanceRecord[]>([]);
 
   const device = useMemo(() => devices.find((d) => d.id === id), [devices, id]);
 
@@ -75,12 +72,11 @@ const DeviceDetail: React.FC = () => {
     [alerts, id]
   );
 
-  const maintenanceRecords = useMemo(() => {
-    const fromMock = MOCK_MAINTENANCE_RECORDS.filter((r) => r.deviceId === id);
-    return [...localRecords, ...fromMock].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-  }, [id, localRecords]);
+  const deviceMaintenanceRecords = useMemo(() => {
+    return maintenanceRecords
+      .filter((r) => r.deviceId === id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [id, maintenanceRecords]);
 
   const statusHistory = useMemo(() => {
     const arr: { time: string; values: Record<string, number> }[] = [];
@@ -120,39 +116,8 @@ const DeviceDetail: React.FC = () => {
     return trends;
   }, [device?.params]);
 
-  if (!device) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center p-4">
-        <div className="text-text-secondary mb-4">设备不存在或已被删除</div>
-        <button onClick={() => nav("/devices")} className="btn btn-primary">
-          <ArrowLeft className="w-4 h-4" />
-          返回设备列表
-        </button>
-      </div>
-    );
-  }
-
-  const cfg = DeviceTypeConfig[device.type];
-  const Icon = TYPE_ICON[device.type];
-
-  const handleSubmitMaintenance = () => {
-    if (!newMaintenance.operator || !newMaintenance.description) return;
-    const record: DeviceMaintenanceRecord = {
-      id: `mr-local-${Date.now()}`,
-      deviceId: device.id,
-      type: newMaintenance.type,
-      date: formatDateTime(new Date()),
-      operator: newMaintenance.operator,
-      description: newMaintenance.description,
-      result: newMaintenance.result || "待进一步观察",
-    };
-    setLocalRecords([record, ...localRecords]);
-    setNewMaintenance({ type: "定期巡检", operator: "", description: "", result: "" });
-    setShowMaintenanceModal(false);
-  };
-
   const paramGauges = useMemo(() => {
-    if (!device.params) return [];
+    if (!device?.params) return [];
     const entries = Object.entries(device.params);
     return entries.slice(0, 4).map(([key, value]) => {
       const numVal =
@@ -184,7 +149,36 @@ const DeviceDetail: React.FC = () => {
         displayValue: value,
       };
     });
-  }, [device.params]);
+  }, [device?.params]);
+
+  if (!device) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-4">
+        <div className="text-text-secondary mb-4">设备不存在或已被删除</div>
+        <button onClick={() => nav("/devices")} className="btn btn-primary">
+          <ArrowLeft className="w-4 h-4" />
+          返回设备列表
+        </button>
+      </div>
+    );
+  }
+
+  const cfg = DeviceTypeConfig[device.type];
+  const Icon = TYPE_ICON[device.type];
+
+  const handleSubmitMaintenance = () => {
+    if (!newMaintenance.operator || !newMaintenance.description) return;
+    createMaintenanceRecord({
+      deviceId: device.id,
+      type: newMaintenance.type,
+      date: formatDateTime(new Date()),
+      operator: newMaintenance.operator,
+      description: newMaintenance.description,
+      result: newMaintenance.result || "待进一步观察",
+    });
+    setNewMaintenance({ type: "定期巡检", operator: "", description: "", result: "" });
+    setShowMaintenanceModal(false);
+  };
 
   return (
     <div className="h-full flex flex-col p-4 gap-4 overflow-hidden">
@@ -521,10 +515,10 @@ const DeviceDetail: React.FC = () => {
             }
           >
             <div className="flex-1 overflow-y-auto pr-1 min-h-0">
-              {maintenanceRecords.length > 0 ? (
+              {deviceMaintenanceRecords.length > 0 ? (
                 <div className="relative pl-6">
                   <div className="absolute left-[7px] top-2 bottom-2 w-px bg-gradient-to-b from-accent/50 via-border to-transparent" />
-                  {maintenanceRecords.map((r, idx) => (
+                  {deviceMaintenanceRecords.map((r, idx) => (
                     <div
                       key={r.id}
                       className="relative pb-5 last:pb-0"

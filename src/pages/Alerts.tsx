@@ -25,6 +25,9 @@ import {
   RefreshCw,
   Download,
   Settings,
+  FileWarning,
+  Plus,
+  ExternalLink,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
 import { MOCK_TUNNELS, MOCK_STAFF, MOCK_DEVICES } from "@/data/mockData";
@@ -57,6 +60,8 @@ const Alerts: React.FC = () => {
     dispatchAlert,
     closeAlert,
     batchConfirmAlerts,
+    createIncident,
+    incidents,
   } = useMonitorStore();
 
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
@@ -70,9 +75,17 @@ const Alerts: React.FC = () => {
   });
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showDispatchModal, setShowDispatchModal] = useState(false);
+  const [showIncidentModal, setShowIncidentModal] = useState(false);
   const [confirmRemark, setConfirmRemark] = useState("");
   const [dispatchTarget, setDispatchTarget] = useState("");
   const [currentUser] = useState("周监控");
+  const [incidentForm, setIncidentForm] = useState({
+    title: "",
+    description: "",
+    assignee: "",
+    priority: AlertLevel.NORMAL as AlertLevel,
+    deadline: "",
+  });
 
   const deviceTypeMap = useMemo(() => {
     const map: Record<string, DeviceType> = {};
@@ -299,6 +312,56 @@ const Alerts: React.FC = () => {
         : null
     );
   };
+
+  const handleOpenIncidentModal = () => {
+    if (!selectedAlert) return;
+    setIncidentForm({
+      title: selectedAlert.title,
+      description: `【告警来源】${selectedAlert.content}\n【设备】${selectedAlert.deviceName}\n【隧道】${selectedAlert.tunnelName}`,
+      assignee: "",
+      priority: selectedAlert.level,
+      deadline: "",
+    });
+    setShowIncidentModal(true);
+  };
+
+  const handleCreateIncident = () => {
+    if (!selectedAlert || !incidentForm.title || !incidentForm.assignee) return;
+    const newInc = createIncident({
+      title: incidentForm.title,
+      description: incidentForm.description,
+      assignee: incidentForm.assignee,
+      priority: incidentForm.priority,
+      deadline: incidentForm.deadline || undefined,
+      alertId: selectedAlert.id,
+    });
+    setShowIncidentModal(false);
+    setIncidentForm({
+      title: "",
+      description: "",
+      assignee: "",
+      priority: AlertLevel.NORMAL,
+      deadline: "",
+    });
+    if (newInc) {
+      setSelectedAlert((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: AlertStatus.PROCESSING,
+              relatedIncidentId: newInc.id,
+              dispatchedTo: newInc.assignee,
+              dispatchedAt: formatDateTime(new Date()),
+            }
+          : null
+      );
+    }
+  };
+
+  const relatedIncident = useMemo(() => {
+    if (!selectedAlert?.relatedIncidentId) return null;
+    return incidents.find((i) => i.id === selectedAlert.relatedIncidentId);
+  }, [selectedAlert, incidents]);
 
   const resetFilters = () => {
     setFilters({
@@ -1078,6 +1141,77 @@ const Alerts: React.FC = () => {
                 )}
               </div>
 
+              {relatedIncident && (
+                <div className="p-4 border-b border-border/30">
+                  <div className="text-xs text-text-secondary mb-3 flex items-center gap-1">
+                    <ExternalLink className="w-3.5 h-3.5 text-accent" />
+                    关联处置单
+                  </div>
+                  <div className="p-3 rounded-lg bg-accent/8 border border-accent/30">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="font-number text-xs text-accent font-semibold">
+                            {relatedIncident.code}
+                          </span>
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded border"
+                            style={{
+                              backgroundColor:
+                                relatedIncident.status === "pending"
+                                  ? "rgba(143,164,199,0.15)"
+                                  : relatedIncident.status === "in_progress"
+                                  ? "rgba(0,212,255,0.15)"
+                                  : relatedIncident.status === "feedback"
+                                  ? "rgba(255,122,0,0.15)"
+                                  : "rgba(0,200,83,0.15)",
+                              borderColor:
+                                relatedIncident.status === "pending"
+                                  ? "rgba(143,164,199,0.4)"
+                                  : relatedIncident.status === "in_progress"
+                                  ? "rgba(0,212,255,0.4)"
+                                  : relatedIncident.status === "feedback"
+                                  ? "rgba(255,122,0,0.4)"
+                                  : "rgba(0,200,83,0.4)",
+                              color:
+                                relatedIncident.status === "pending"
+                                  ? "#8FA4C7"
+                                  : relatedIncident.status === "in_progress"
+                                  ? "#00D4FF"
+                                  : relatedIncident.status === "feedback"
+                                  ? "#FF7A00"
+                                  : "#00C853",
+                            }}
+                          >
+                            {relatedIncident.status === "pending"
+                              ? "待处理"
+                              : relatedIncident.status === "in_progress"
+                              ? "处置中"
+                              : relatedIncident.status === "feedback"
+                              ? "反馈中"
+                              : "已闭环"}
+                          </span>
+                        </div>
+                        <div className="text-sm font-medium text-text-primary mb-1">
+                          {relatedIncident.title}
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-text-muted">
+                          <span className="flex items-center gap-1">
+                            <User className="w-3 h-3" />
+                            {relatedIncident.assignee}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {timeAgo(relatedIncident.createdAt)}
+                          </span>
+                        </div>
+                      </div>
+                      <FileWarning className="w-5 h-5 text-accent shrink-0 mt-0.5" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="p-4 border-b border-border/30">
                 <div className="text-xs text-text-secondary mb-3 flex items-center gap-1">
                   <MessageSquare className="w-3.5 h-3.5 text-accent" />
@@ -1182,6 +1316,17 @@ const Alerts: React.FC = () => {
 
             <div className="p-4 border-t border-border/50 bg-bg-elevated/30 shrink-0">
               <div className="flex items-center gap-2">
+                {(selectedAlert.status === AlertStatus.PENDING ||
+                  selectedAlert.status === AlertStatus.CONFIRMED) &&
+                  !selectedAlert.relatedIncidentId && (
+                    <button
+                      onClick={handleOpenIncidentModal}
+                      className="btn btn-secondary flex-1"
+                    >
+                      <FileWarning className="w-4 h-4" />
+                      生成处置单
+                    </button>
+                  )}
                 {selectedAlert.status === AlertStatus.PENDING && (
                   <>
                     <button
@@ -1399,6 +1544,168 @@ const Alerts: React.FC = () => {
               >
                 <Send className="w-4 h-4" />
                 确认转派
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {showIncidentModal && selectedAlert && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
+            onClick={() => setShowIncidentModal(false)}
+          />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] bg-bg-card border border-border rounded-lg shadow-2xl z-50 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-accent/20 flex items-center justify-center">
+                  <FileWarning className="w-4 h-4 text-accent" />
+                </div>
+                <div>
+                  <div className="text-base font-semibold text-text-primary">
+                    生成处置单
+                  </div>
+                  <div className="text-[11px] text-text-muted">
+                    由告警自动创建，关联告警编号: ALT-{selectedAlert.id.slice(2, 10).toUpperCase()}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowIncidentModal(false)}
+                className="w-8 h-8 rounded flex items-center justify-center text-text-muted hover:bg-danger/20 hover:text-danger transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <div className="p-3 rounded-md bg-bg-elevated/50 border border-border/30">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <StatusBadge type="alert" status={selectedAlert.level} showDot={false} />
+                  <span className="text-xs font-medium text-text-primary">
+                    {selectedAlert.title}
+                  </span>
+                </div>
+                <div className="text-[11px] text-text-muted">
+                  {selectedAlert.tunnelName} · {selectedAlert.deviceName}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-text-secondary mb-1.5">
+                  事件标题 <span className="text-danger">*</span>
+                </label>
+                <input
+                  value={incidentForm.title}
+                  onChange={(e) =>
+                    setIncidentForm({ ...incidentForm, title: e.target.value })
+                  }
+                  placeholder="请输入事件标题"
+                  className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary placeholder:text-text-muted focus:border-accent/50 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-text-secondary mb-1.5">
+                  事件描述
+                </label>
+                <textarea
+                  value={incidentForm.description}
+                  onChange={(e) =>
+                    setIncidentForm({ ...incidentForm, description: e.target.value })
+                  }
+                  placeholder="请详细描述事件情况、影响范围等"
+                  rows={4}
+                  className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary placeholder:text-text-muted focus:border-accent/50 focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1.5">
+                    负责人 <span className="text-danger">*</span>
+                  </label>
+                  <select
+                    value={incidentForm.assignee}
+                    onChange={(e) =>
+                      setIncidentForm({ ...incidentForm, assignee: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none"
+                  >
+                    <option value="">请选择负责人</option>
+                    {maintenanceStaff.map((s) => (
+                      <option key={s.id} value={s.name}>
+                        {s.name} - {s.team}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1.5">
+                    优先级
+                  </label>
+                  <select
+                    value={incidentForm.priority}
+                    onChange={(e) =>
+                      setIncidentForm({
+                        ...incidentForm,
+                        priority: e.target.value as AlertLevel,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none"
+                  >
+                    {Object.values(AlertLevel).map((l) => (
+                      <option key={l} value={l}>
+                        {AlertLevelConfig[l].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-text-secondary mb-1.5">
+                  处置期限
+                </label>
+                <div className="relative">
+                  <Calendar className="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="datetime-local"
+                    value={incidentForm.deadline}
+                    onChange={(e) =>
+                      setIncidentForm({ ...incidentForm, deadline: e.target.value })
+                    }
+                    className="w-full pl-9 pr-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 p-3 rounded-md bg-accent/8 border border-accent/30">
+                <AlertTriangle className="w-4 h-4 text-accent shrink-0" />
+                <div className="text-[11px] text-text-secondary">
+                  创建处置单后，该告警将自动转为"处理中"状态，处置单将自动关联此告警。
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-border/50 flex items-center justify-end gap-2 bg-bg-elevated/30 shrink-0">
+              <button
+                onClick={() => setShowIncidentModal(false)}
+                className="btn btn-secondary"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleCreateIncident}
+                disabled={!incidentForm.title || !incidentForm.assignee}
+                className={cn(
+                  "btn",
+                  incidentForm.title && incidentForm.assignee
+                    ? "btn-primary"
+                    : "opacity-50 cursor-not-allowed bg-bg-elevated text-text-muted border-border"
+                )}
+              >
+                <Plus className="w-4 h-4" />
+                创建并关联处置单
               </button>
             </div>
           </div>
