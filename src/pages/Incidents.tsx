@@ -20,12 +20,13 @@ import {
   Users,
 } from "lucide-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
-import { MOCK_STAFF, MOCK_ALERTS } from "@/data/mockData";
+import { MOCK_STAFF, MOCK_TUNNELS } from "@/data/mockData";
 import Card from "@/components/common/Card";
 import StatusBadge from "@/components/common/StatusBadge";
 import {
   cn,
   AlertLevelConfig,
+  AlertStatusConfig,
   timeAgo,
   getDeadlineStatus,
   formatCountdown,
@@ -34,7 +35,7 @@ import {
   DEADLINE_ORDER,
   DeadlineStatus,
 } from "@/utils/format";
-import { Incident, AlertLevel } from "@/types";
+import { Incident, AlertLevel, AlertStatus } from "@/types";
 
 type TabKey = "list" | "tracking";
 
@@ -52,7 +53,7 @@ const INCIDENT_STATUS_CONFIG: Record<
 
 const Incidents: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>("list");
-  const { incidents, createIncident, updateIncidentPhase, addFeedback } = useMonitorStore();
+  const { incidents, createIncident, updateIncidentPhase, addFeedback, alerts } = useMonitorStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState<string | null>(null);
@@ -68,6 +69,7 @@ const Incidents: React.FC = () => {
     assignee: "",
     priority: AlertLevel.NORMAL as AlertLevel,
     deadline: "",
+    alertId: "",
   });
 
   useEffect(() => {
@@ -110,6 +112,11 @@ const Incidents: React.FC = () => {
 
   const maintenanceStaff = MOCK_STAFF.filter((s) => s.role !== "duty");
 
+  const availableAlerts = useMemo(() => {
+    const linkedAlertIds = new Set(incidents.map((i) => i.alertId).filter(Boolean) as string[]);
+    return alerts.filter((a) => !linkedAlertIds.has(a.id));
+  }, [alerts, incidents]);
+
   const handleCreate = () => {
     if (!newForm.title || !newForm.assignee) return;
     createIncident({
@@ -118,6 +125,7 @@ const Incidents: React.FC = () => {
       assignee: newForm.assignee,
       priority: newForm.priority,
       deadline: newForm.deadline || undefined,
+      alertId: newForm.alertId || undefined,
     });
     setShowNewModal(false);
     setNewForm({
@@ -126,6 +134,7 @@ const Incidents: React.FC = () => {
       assignee: "",
       priority: AlertLevel.NORMAL,
       deadline: "",
+      alertId: "",
     });
   };
 
@@ -378,11 +387,12 @@ const Incidents: React.FC = () => {
               <div>
                 <label className="block text-sm text-text-secondary mb-1.5">关联告警（可选）</label>
                 <select
+                  value={newForm.alertId}
+                  onChange={(e) => setNewForm({ ...newForm, alertId: e.target.value })}
                   className="w-full px-3 py-2 bg-bg-elevated border border-border rounded text-sm text-text-primary focus:border-accent/50 focus:outline-none"
-                  defaultValue=""
                 >
                   <option value="">不关联告警</option>
-                  {MOCK_ALERTS.slice(0, 10).map((a) => (
+                  {availableAlerts.map((a) => (
                     <option key={a.id} value={a.id}>
                       [{AlertLevelConfig[a.level].label}] {a.title}
                     </option>
@@ -523,6 +533,8 @@ const IncidentCard: React.FC<{
   onAdvance: () => void;
   onAddFeedback: () => void;
 }> = ({ incident, expanded, onToggle, onAdvance, onAddFeedback }) => {
+  const { alerts } = useMonitorStore();
+  const relatedAlert = incident.alertId ? alerts.find((a) => a.id === incident.alertId) : null;
   const statusCfg = INCIDENT_STATUS_CONFIG[incident.status];
   const priorityCfg = AlertLevelConfig[incident.priority];
   const progress = ((incident.phase - 1) / 3) * 100;
@@ -650,6 +662,41 @@ const IncidentCard: React.FC<{
             </div>
           )}
 
+          {relatedAlert && (
+            <div className="p-3 rounded-lg bg-accent/5 border border-accent/20">
+              <div className="text-xs text-text-secondary mb-2 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-accent" />
+                关联告警
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[10px] text-text-muted mb-0.5">告警标题</div>
+                  <div className="text-xs text-text-primary font-medium">{relatedAlert.title}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-text-muted mb-0.5">告警等级</div>
+                  <StatusBadge type="alert" status={relatedAlert.level} />
+                </div>
+                <div>
+                  <div className="text-[10px] text-text-muted mb-0.5">告警状态</div>
+                  <StatusBadge type="alert" status={relatedAlert.status} />
+                </div>
+                <div>
+                  <div className="text-[10px] text-text-muted mb-0.5">所属隧道</div>
+                  <div className="text-xs text-text-primary">{relatedAlert.tunnelName}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-text-muted mb-0.5">关联设备</div>
+                  <div className="text-xs text-text-primary">{relatedAlert.deviceName}</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-[10px] text-text-muted mb-0.5">告警内容</div>
+                  <div className="text-xs text-text-primary leading-relaxed">{relatedAlert.content}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div className="p-3 rounded-lg bg-bg-elevated/40 border border-border/30">
               <div className="text-xs text-text-secondary mb-2.5 flex items-center gap-1.5">
@@ -746,11 +793,48 @@ const IncidentCard: React.FC<{
 };
 
 const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ incidents, nowTick }) => {
+  const { alerts } = useMonitorStore();
   const [groupDimension, setGroupDimension] = useState<"deadline" | "priority" | "assignee">("deadline");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [tunnelFilter, setTunnelFilter] = useState<string>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
+  const [deadlineFilter, setDeadlineFilter] = useState<string>("all");
+
+  const incidentTunnelMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    incidents.forEach((inc) => {
+      if (inc.alertId) {
+        const alert = alerts.find((a) => a.id === inc.alertId);
+        if (alert) map[inc.id] = alert.tunnelId;
+      }
+    });
+    return map;
+  }, [incidents, alerts]);
+
+  const uniqueAssignees = useMemo(() => {
+    const set = new Set<string>();
+    incidents.forEach((inc) => { if (inc.assignee) set.add(inc.assignee); });
+    return Array.from(set).sort();
+  }, [incidents]);
+
+  const filteredIncidents = useMemo(() => {
+    return incidents.filter((inc) => {
+      if (tunnelFilter !== "all") {
+        const tId = incidentTunnelMap[inc.id];
+        if (tId !== tunnelFilter) return false;
+      }
+      if (assigneeFilter !== "all" && inc.assignee !== assigneeFilter) return false;
+      if (deadlineFilter !== "all") {
+        const ds = getDeadlineStatus(inc.deadline);
+        if (deadlineFilter === "overdue" && ds !== "overdue") return false;
+        if (deadlineFilter === "within24h" && ds !== "urgent" && ds !== "warning") return false;
+      }
+      return true;
+    });
+  }, [incidents, tunnelFilter, assigneeFilter, deadlineFilter, incidentTunnelMap]);
 
   const sortedIncidents = useMemo(() => {
-    return [...incidents].sort((a, b) => {
+    return [...filteredIncidents].sort((a, b) => {
       const dlA = getDeadlineStatus(a.deadline);
       const dlB = getDeadlineStatus(b.deadline);
       const dlDiff = DEADLINE_ORDER[dlA] - DEADLINE_ORDER[dlB];
@@ -759,7 +843,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
       if (prDiff !== 0) return prDiff;
       return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
     });
-  }, [incidents, nowTick]);
+  }, [filteredIncidents, nowTick]);
 
   const groupedData = useMemo(() => {
     const groups: Record<string, Incident[]> = {};
@@ -901,10 +985,81 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
         </div>
       </Card>
 
+      <Card corner className="shrink-0">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Filter className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-xs text-text-secondary">值班筛选:</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">隧道</span>
+            <select
+              value={tunnelFilter}
+              onChange={(e) => setTunnelFilter(e.target.value)}
+              className="px-2 py-1 text-xs rounded bg-bg-elevated border border-border text-text-primary focus:outline-none focus:border-accent/50"
+            >
+              <option value="all">全部隧道</option>
+              {MOCK_TUNNELS.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">负责人</span>
+            <select
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value)}
+              className="px-2 py-1 text-xs rounded bg-bg-elevated border border-border text-text-primary focus:outline-none focus:border-accent/50 max-w-[140px]"
+            >
+              <option value="all">全部负责人</option>
+              {uniqueAssignees.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">剩余时间</span>
+            <div className="flex items-center gap-1">
+              {[
+                { key: "all", label: "全部" },
+                { key: "overdue", label: "已超期" },
+                { key: "within24h", label: "24小时内" },
+              ].map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setDeadlineFilter(opt.key)}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] rounded border transition-all",
+                    deadlineFilter === opt.key
+                      ? opt.key === "overdue"
+                        ? "bg-danger/15 border-danger/50 text-danger"
+                        : opt.key === "within24h"
+                        ? "bg-warning/15 border-warning/50 text-warning"
+                        : "bg-accent/15 border-accent/50 text-accent"
+                      : "bg-bg-elevated border-border text-text-secondary hover:border-border-light hover:text-text-primary"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {(tunnelFilter !== "all" || assigneeFilter !== "all" || deadlineFilter !== "all") && (
+            <button
+              onClick={() => { setTunnelFilter("all"); setAssigneeFilter("all"); setDeadlineFilter("all"); }}
+              className="px-2 py-1 text-[11px] rounded border border-border text-text-muted hover:text-text-primary hover:border-border-light transition-colors flex items-center gap-1"
+            >
+              <X className="w-3 h-3" />
+              清除筛选
+            </button>
+          )}
+        </div>
+      </Card>
+
       <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
         {groupOrder.length === 0 && (
           <div className="h-full flex items-center justify-center text-text-muted text-sm">
-            暂无未关闭处置单
+            暂无符合条件的处置单
           </div>
         )}
         {groupOrder.map((groupKey) => {
@@ -968,7 +1123,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
 };
 
 const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) => {
-  const { updateIncidentPhase, addFeedback } = useMonitorStore();
+  const { updateIncidentPhase, addFeedback, alerts } = useMonitorStore();
   const [expanded, setExpanded] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackContent, setFeedbackContent] = useState("");
@@ -980,6 +1135,11 @@ const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) =>
   const progress = ((incident.phase - 1) / 3) * 100;
   const canAdvance = incident.phase < 4;
   const maintenanceStaff = MOCK_STAFF.filter((s) => s.role !== "duty");
+
+  const relatedAlert = useMemo(() => {
+    if (!incident.alertId) return null;
+    return alerts.find((a) => a.id === incident.alertId) || null;
+  }, [incident.alertId, alerts]);
 
   const handleAddFeedback = () => {
     if (!feedbackContent || !feedbackReporter) return;
@@ -1123,37 +1283,138 @@ const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) =>
         )}
 
         {expanded && (
-          <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+          <div className="mt-3 pt-3 border-t border-border/40 space-y-3">
             {incident.description && (
-              <div className="text-xs text-text-secondary leading-relaxed">
-                <span className="text-text-muted">描述：</span>
-                {incident.description}
+              <div className="p-2.5 rounded-lg bg-bg-elevated/50 border border-border/30">
+                <div className="text-[11px] text-text-muted mb-1">事件描述</div>
+                <p className="text-xs text-text-secondary leading-relaxed">{incident.description}</p>
               </div>
             )}
-            <div className="flex items-center gap-4 text-[11px] text-text-muted">
-              <span className="flex items-center gap-1">
-                <Calendar className="w-2.5 h-2.5" />
-                创建 {timeAgo(incident.createdAt)}
-              </span>
-              <span className="flex items-center gap-1">
-                <MessageSquare className="w-2.5 h-2.5" />
-                {incident.feedbacks.length} 条反馈
-              </span>
-            </div>
-            {incident.feedbacks.length > 0 && (
-              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                {incident.feedbacks.slice(-3).map((fb) => (
-                  <div
-                    key={fb.id}
-                    className="p-2 rounded bg-bg-elevated/60 border border-border/30"
-                  >
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-[11px] font-medium text-accent">{fb.reporter}</span>
-                      <span className="text-[10px] text-text-muted">{timeAgo(fb.time)}</span>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-2.5 rounded-lg bg-bg-elevated/40 border border-border/30">
+                <div className="text-[11px] text-text-muted mb-2 flex items-center gap-1.5">
+                  <Clock className="w-3 h-3 text-accent" />
+                  处置时间线
+                </div>
+                <div className="relative pl-4 space-y-2">
+                  <div className="absolute left-[5px] top-1 bottom-1 w-px bg-border/50" />
+                  {incident.timeline.map((t, i) => (
+                    <div key={i} className="relative">
+                      <div
+                        className={cn(
+                          "absolute -left-4 w-2.5 h-2.5 rounded-full border-2 mt-0.5",
+                          i === incident.timeline.length - 1
+                            ? "bg-accent border-accent shadow-glow-sm"
+                            : "bg-bg-card border-success"
+                        )}
+                      />
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-medium text-text-primary">{t.status}</span>
+                          {i === incident.timeline.length - 1 && (
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-accent/15 text-accent">当前</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-0.5">
+                          {t.operator} · {t.time}
+                        </div>
+                        {t.remark && (
+                          <div className="text-[10px] text-text-secondary mt-0.5 pl-2 border-l border-border/50">
+                            {t.remark}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-text-secondary leading-relaxed">{fb.content}</p>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-bg-elevated/40 border border-border/30 flex flex-col">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-[11px] text-text-muted flex items-center gap-1.5">
+                    <MessageSquare className="w-3 h-3 text-accent" />
+                    现场反馈记录
                   </div>
-                ))}
+                  <span className="text-[10px] text-text-muted">{incident.feedbacks.length} 条</span>
+                </div>
+                <div className="flex-1 space-y-1.5 overflow-y-auto pr-1 max-h-[200px]">
+                  {incident.feedbacks.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-[11px] text-text-muted py-6">
+                      暂无现场反馈
+                    </div>
+                  ) : (
+                    incident.feedbacks.map((fb) => (
+                      <div
+                        key={fb.id}
+                        className="p-2 rounded-md bg-bg-card/70 border border-border/30"
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[11px] font-medium text-accent">{fb.reporter}</span>
+                          <span className="text-[9px] text-text-muted">{timeAgo(fb.time)}</span>
+                        </div>
+                        <p className="text-[11px] text-text-secondary leading-relaxed">{fb.content}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {relatedAlert && (
+              <div className="p-2.5 rounded-lg bg-bg-elevated/40 border border-border/30">
+                <div className="text-[11px] text-text-muted mb-2 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3 h-3 text-accent" />
+                  关联告警摘要
+                </div>
+                <div className="grid grid-cols-5 gap-3">
+                  <div>
+                    <div className="text-[10px] text-text-muted">告警标题</div>
+                    <div className="text-[11px] text-text-primary mt-0.5">{relatedAlert.title}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted">告警等级</div>
+                    <div className="mt-0.5">
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{
+                          backgroundColor: AlertLevelConfig[relatedAlert.level].color + "15",
+                          color: AlertLevelConfig[relatedAlert.level].color,
+                        }}
+                      >
+                        {AlertLevelConfig[relatedAlert.level].label}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted">告警状态</div>
+                    <div className="mt-0.5">
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{
+                          backgroundColor: AlertStatusConfig[relatedAlert.status].color + "15",
+                          color: AlertStatusConfig[relatedAlert.status].color,
+                        }}
+                      >
+                        {AlertStatusConfig[relatedAlert.status].label}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted">关联设备</div>
+                    <div className="text-[11px] text-text-primary mt-0.5">{relatedAlert.deviceName}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted">所属隧道</div>
+                    <div className="text-[11px] text-text-primary mt-0.5">{relatedAlert.tunnelName || relatedAlert.tunnelId}</div>
+                  </div>
+                </div>
+                {relatedAlert.content && (
+                  <div className="mt-2 pt-2 border-t border-border/30">
+                    <div className="text-[10px] text-text-muted mb-0.5">告警内容</div>
+                    <div className="text-[11px] text-text-secondary leading-relaxed">{relatedAlert.content}</div>
+                  </div>
+                )}
               </div>
             )}
           </div>

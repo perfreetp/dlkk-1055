@@ -313,6 +313,15 @@ const Alerts: React.FC = () => {
     );
   };
 
+  const handleRowClose = (id: string) => {
+    closeAlert(id);
+    setSelectedAlert((prev) =>
+      prev && prev.id === id
+        ? { ...prev, status: AlertStatus.CLOSED, closedAt: formatDateTime(new Date()) }
+        : prev
+    );
+  };
+
   const handleOpenIncidentModal = () => {
     if (!selectedAlert) return;
     setIncidentForm({
@@ -901,7 +910,7 @@ const Alerts: React.FC = () => {
                       )}
                       {a.status === AlertStatus.PROCESSING && (
                         <button
-                          onClick={handleClose}
+                          onClick={() => handleRowClose(a.id)}
                           className="btn btn-secondary !py-1 !px-2 text-[11px] text-success hover:text-success"
                           title="闭环告警"
                         >

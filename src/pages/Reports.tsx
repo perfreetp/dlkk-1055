@@ -40,7 +40,6 @@ import {
   formatDate,
   formatTime,
   formatNumber,
-  randomBetween,
   formatDateTime,
 } from "@/utils/format";
 import { AlertLevel, AlertStatus, DeviceStatus } from "@/types";
@@ -98,6 +97,14 @@ const Reports: React.FC = () => {
     return d >= start && d <= end;
   }, [dateRange]);
 
+  const filteredAlerts = useMemo(() => {
+    return alerts.filter((a) => {
+      const tunnelMatch = selectedTunnels.includes(a.tunnelId);
+      const dateMatch = isInDateRange(a.createdAt);
+      return tunnelMatch && dateMatch;
+    });
+  }, [alerts, selectedTunnels, isInDateRange]);
+
   const trafficTrend = useMemo(() => {
     if (!hasSelectedTunnels) return [];
     const arr: { time: string; values: Record<string, number> }[] = [];
@@ -106,11 +113,12 @@ const Reports: React.FC = () => {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
       const flowBase = 12000 * tunnelFactor;
       const weekend = d.getDay() === 0 || d.getDay() === 6 ? 0.8 : 1;
+      const variation = Math.sin(i * 1.3) * 600 + Math.cos(i * 0.7) * 300;
       arr.push({
         time: `${d.getMonth() + 1}/${d.getDate()}`,
         values: {
-          flow: Math.round(flowBase * weekend + randomBetween(-800, 800)),
-          avgSpeed: Math.round(55 + randomBetween(-8, 15)),
+          flow: Math.round(flowBase * weekend + variation),
+          avgSpeed: Math.round(55 + (weekend === 0.8 ? -5 : 0) + Math.sin(i * 0.9) * 6 + Math.cos(i * 1.7) * 4),
         },
       });
     }
@@ -121,20 +129,31 @@ const Reports: React.FC = () => {
     if (!hasSelectedTunnels) return [];
     const arr: { time: string; values: Record<string, number> }[] = [];
     const start = new Date(dateRange.start);
+    const dayMap = new Map<string, { urgent: number; important: number; normal: number; info: number }>();
     for (let i = 0; i < dateRangeDays; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+      dayMap.set(formatDate(d), { urgent: 0, important: 0, normal: 0, info: 0 });
+    }
+    filteredAlerts.forEach((a) => {
+      const dateKey = formatDate(new Date(a.createdAt));
+      const counts = dayMap.get(dateKey);
+      if (!counts) return;
+      if (a.level === AlertLevel.URGENT) counts.urgent++;
+      else if (a.level === AlertLevel.IMPORTANT) counts.important++;
+      else if (a.level === AlertLevel.NORMAL) counts.normal++;
+      else counts.info++;
+    });
+    for (let i = 0; i < dateRangeDays; i++) {
+      const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+      const dateKey = formatDate(d);
+      const counts = dayMap.get(dateKey)!;
       arr.push({
         time: `${d.getMonth() + 1}/${d.getDate()}`,
-        values: {
-          urgent: Math.round(2 * tunnelFactor + randomBetween(0, 3)),
-          important: Math.round(5 * tunnelFactor + randomBetween(0, 5)),
-          normal: Math.round(12 * tunnelFactor + randomBetween(-3, 5)),
-          info: Math.round(8 * tunnelFactor + randomBetween(-2, 4)),
-        },
+        values: counts,
       });
     }
     return arr;
-  }, [dateRange, dateRangeDays, tunnelFactor, hasSelectedTunnels]);
+  }, [dateRange, dateRangeDays, filteredAlerts, hasSelectedTunnels]);
 
   const envTrend = useMemo(() => {
     if (!hasSelectedTunnels) return [];
@@ -147,28 +166,22 @@ const Reports: React.FC = () => {
     for (let i = 0; i < dataPoints; i++) {
       const t = new Date(start.getTime() + i * stepMs);
       const hourFactor = Math.sin(((t.getHours() - 6) / 24) * Math.PI * 2);
+      const isWeekend = t.getDay() === 0 || t.getDay() === 6;
+      const weekendCoef = isWeekend ? 0.9 : 1;
       arr.push({
         time: dateRangeDays <= 2
           ? `${String(t.getHours()).padStart(2, "0")}:00`
           : `${t.getMonth() + 1}/${t.getDate()}`,
         values: {
-          co: +(35 + hourFactor * 20 + randomBetween(-8, 8, 1)).toFixed(1),
-          visibility: Math.round(350 - hourFactor * 120 + randomBetween(-40, 40)),
-          temperature: +(18 + hourFactor * 8 + randomBetween(-2, 2, 1)).toFixed(1),
-          humidity: Math.round(65 - hourFactor * 15 + randomBetween(-5, 5)),
+          co: +(35 * weekendCoef + hourFactor * 20 + Math.sin(i * 1.1) * 6 + Math.cos(i * 0.6) * 3).toFixed(1),
+          visibility: Math.round(350 * weekendCoef - hourFactor * 120 + Math.sin(i * 0.8) * 25 + Math.cos(i * 1.3) * 15),
+          temperature: +(18 + hourFactor * 8 + Math.sin(i * 0.7) * 1.5 + Math.cos(i * 1.1) * 0.8).toFixed(1),
+          humidity: Math.round(65 - hourFactor * 15 + Math.sin(i * 1.3) * 3 + Math.cos(i * 0.9) * 2),
         },
       });
     }
     return arr;
   }, [dateRange, dateRangeDays, hasSelectedTunnels]);
-
-  const filteredAlerts = useMemo(() => {
-    return alerts.filter((a) => {
-      const tunnelMatch = selectedTunnels.includes(a.tunnelId);
-      const dateMatch = isInDateRange(a.createdAt);
-      return tunnelMatch && dateMatch;
-    });
-  }, [alerts, selectedTunnels, isInDateRange]);
 
   const alertLevelStats = useMemo(() => {
     const counts = { urgent: 0, important: 0, normal: 0, info: 0 };
