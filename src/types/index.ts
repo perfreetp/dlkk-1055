@@ -63,6 +63,13 @@ export interface DeviceMaintenanceRecord {
   result: string;
 }
 
+export interface AlertProcessRecord {
+  time: string;
+  operator: string;
+  content: string;
+  type: "feedback" | "system" | "manual";
+}
+
 export interface Alert {
   id: string;
   deviceId: string;
@@ -81,6 +88,7 @@ export interface Alert {
   dispatchedAt?: string;
   closedAt?: string;
   relatedIncidentId?: string;
+  processRecords?: AlertProcessRecord[];
 }
 
 export type IncidentSourceType = "alert" | "manual";

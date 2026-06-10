@@ -20,7 +20,14 @@ import {
   FileCode,
   MapPin,
   ArrowLeft,
+  Activity,
+  CheckCircle,
+  XCircle,
+  Timer,
+  MessageSquare,
+  Target,
 } from "lucide-react";
+import ReactECharts from "echarts-for-react";
 import { useMonitorStore } from "@/store/useMonitorStore";
 import {
   MOCK_TUNNELS,
@@ -43,12 +50,12 @@ import {
   formatNumber,
   formatDateTime,
 } from "@/utils/format";
-import { AlertLevel, AlertStatus, DeviceStatus } from "@/types";
+import { AlertLevel, AlertStatus, DeviceStatus, Incident } from "@/types";
 
 type MetricKey = "traffic" | "alerts" | "environment";
 
 const Reports: React.FC = () => {
-  const { alerts, devices } = useMonitorStore();
+  const { alerts, devices, incidents } = useMonitorStore();
   const [selectedTunnels, setSelectedTunnels] = useState<string[]>(MOCK_TUNNELS.map((t) => t.id));
   const [showTunnelDropdown, setShowTunnelDropdown] = useState(false);
   const [dateRange, setDateRange] = useState({
@@ -62,6 +69,7 @@ const Reports: React.FC = () => {
   ]);
   const [exportStatus, setExportStatus] = useState<{ csv: boolean; html: boolean }>({ csv: false, html: false });
   const [drillDownDate, setDrillDownDate] = useState<string | null>(null);
+  const [drillDownTab, setDrillDownTab] = useState<"alerts" | "incidents">("alerts");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const toggleTunnel = (id: string) => {
@@ -177,6 +185,103 @@ const Reports: React.FC = () => {
     });
     return groups;
   }, [drillDownAlerts]);
+
+  const getDisposalHours = (incident: Incident): number => {
+    const startTime = new Date(incident.createdAt).getTime();
+    const endTime = incident.status === "closed" && incident.timeline.length >= 4
+      ? new Date(incident.timeline[3].time).getTime()
+      : Date.now();
+    return Math.max(0, (endTime - startTime) / (1000 * 60 * 60));
+  };
+
+  const isOverdue = (incident: Incident): boolean => {
+    const deadline = new Date(incident.deadline).getTime();
+    const endTime = incident.status === "closed" && incident.timeline.length >= 4
+      ? new Date(incident.timeline[3].time).getTime()
+      : Date.now();
+    return endTime > deadline;
+  };
+
+  const getTimeRangeBucket = (hours: number): string => {
+    if (hours <= 2) return "0-2h";
+    if (hours <= 6) return "2-6h";
+    if (hours <= 12) return "6-12h";
+    if (hours <= 24) return "12-24h";
+    return ">24h";
+  };
+
+  const filteredIncidents = useMemo(() => {
+    return incidents.filter((i) => {
+      const tunnelMatch = selectedTunnels.includes(i.tunnelId || "");
+      const dateMatch = isInDateRange(i.createdAt);
+      return tunnelMatch && dateMatch;
+    });
+  }, [incidents, selectedTunnels, isInDateRange]);
+
+  const drillDownIncidents = useMemo(() => {
+    if (!drillDownDate) return [];
+    return filteredIncidents.filter((i) => formatDate(new Date(i.createdAt)) === drillDownDate);
+  }, [filteredIncidents, drillDownDate]);
+
+  const incidentStats = useMemo(() => {
+    const data = drillDownDate ? drillDownIncidents : filteredIncidents;
+    if (data.length === 0) {
+      return {
+        total: 0,
+        closedCount: 0,
+        closedRate: 0,
+        avgDisposalHours: 0,
+        avgFeedbacks: 0,
+        overdueCount: 0,
+        overdueRate: 0,
+        timeDistribution: { "0-2h": 0, "2-6h": 0, "6-12h": 0, "12-24h": 0, ">24h": 0 },
+        byTunnel: {} as Record<string, { total: number; closed: number; avgHours: number; overdue: number }>,
+      };
+    }
+
+    const closed = data.filter((i) => i.status === "closed");
+    const overdue = data.filter((i) => isOverdue(i));
+    const closedHours = closed.map((i) => getDisposalHours(i));
+    const feedbackCounts = data.map((i) => i.feedbacks.length);
+
+    const avgHours = closedHours.length > 0
+      ? closedHours.reduce((a, b) => a + b, 0) / closedHours.length
+      : 0;
+    const avgFb = feedbackCounts.reduce((a, b) => a + b, 0) / feedbackCounts.length;
+
+    const timeDist: Record<string, number> = { "0-2h": 0, "2-6h": 0, "6-12h": 0, "12-24h": 0, ">24h": 0 };
+    closed.forEach((i) => {
+      const bucket = getTimeRangeBucket(getDisposalHours(i));
+      timeDist[bucket] = (timeDist[bucket] || 0) + 1;
+    });
+
+    const byTunnel: Record<string, { total: number; closed: number; avgHours: number; overdue: number }> = {};
+    MOCK_TUNNELS.forEach((t) => {
+      if (!selectedTunnels.includes(t.id)) return;
+      const tunnelData = data.filter((i) => i.tunnelId === t.id);
+      const tunnelClosed = tunnelData.filter((i) => i.status === "closed");
+      const tunnelHours = tunnelClosed.map((i) => getDisposalHours(i));
+      const tunnelOverdue = tunnelData.filter((i) => isOverdue(i));
+      byTunnel[t.id] = {
+        total: tunnelData.length,
+        closed: tunnelClosed.length,
+        avgHours: tunnelHours.length > 0 ? tunnelHours.reduce((a, b) => a + b, 0) / tunnelHours.length : 0,
+        overdue: tunnelOverdue.length,
+      };
+    });
+
+    return {
+      total: data.length,
+      closedCount: closed.length,
+      closedRate: (closed.length / data.length) * 100,
+      avgDisposalHours: avgHours,
+      avgFeedbacks: avgFb,
+      overdueCount: overdue.length,
+      overdueRate: (overdue.length / data.length) * 100,
+      timeDistribution: timeDist,
+      byTunnel,
+    };
+  }, [drillDownDate, drillDownIncidents, filteredIncidents, selectedTunnels]);
 
   const envTrend = useMemo(() => {
     if (!hasSelectedTunnels) return [];
@@ -430,8 +535,30 @@ const Reports: React.FC = () => {
     });
     lines.push("");
 
+    lines.push("## 九、处置效果汇总");
+    lines.push("指标名称,数值,单位");
+    lines.push(`处置单总数,${incidentStats.total},单`);
+    lines.push(`闭环数,${incidentStats.closedCount},单`);
+    lines.push(`闭环率,${incidentStats.closedRate.toFixed(1)},%`);
+    lines.push(`平均处置耗时,${incidentStats.avgDisposalHours.toFixed(1)},小时`);
+    lines.push(`平均反馈次数,${incidentStats.avgFeedbacks.toFixed(1)},次`);
+    lines.push(`超期处置单数,${incidentStats.overdueCount},单`);
+    lines.push(`超期率,${incidentStats.overdueRate.toFixed(1)},%`);
+    lines.push("");
+
+    lines.push("### 9.1 按隧道汇总处置效率");
+    lines.push("隧道名称,处置单总数,闭环数,闭环率(%),平均耗时(h),超期数,超期率(%)");
+    Object.entries(incidentStats.byTunnel).forEach(([tunnelId, stats]) => {
+      const tunnel = MOCK_TUNNELS.find((t) => t.id === tunnelId);
+      if (!tunnel || stats.total === 0) return;
+      const closedRate = stats.total ? (stats.closed / stats.total) * 100 : 0;
+      const overdueRate = stats.total ? (stats.overdue / stats.total) * 100 : 0;
+      lines.push(`${tunnel.name},${stats.total},${stats.closed},${closedRate.toFixed(1)},${stats.avgHours.toFixed(1)},${stats.overdue},${overdueRate.toFixed(1)}`);
+    });
+    lines.push("");
+
     if (drillDownDate) {
-      lines.push(`## 九、下钻明细（${drillDownDate}）`);
+      lines.push(`## 十、下钻明细（${drillDownDate}）`);
       lines.push("告警ID,标题,等级,状态,所属隧道,设备,处置状态,产生时间");
       drillDownAlerts.forEach((a) => {
         const levelLabel = AlertLevelConfig[a.level].label;
@@ -681,6 +808,77 @@ const Reports: React.FC = () => {
         <thead><tr><th>隧道名称</th><th style="text-align:center;">设备总数</th><th style="text-align:center;">运行中</th><th style="text-align:center;">故障</th><th style="text-align:center;">离线</th><th style="text-align:center;">维保中</th><th style="text-align:center;">在线率</th></tr></thead>
         <tbody>${deviceRows}</tbody>
       </table>
+    </div>
+
+    <div class="section">
+      <div class="section-title">处置效果汇总</div>
+      ${
+        incidentStats.total > 0
+          ? `
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">处置单总数</div>
+          <div class="kpi-value">${incidentStats.total}<span class="kpi-unit">单</span></div>
+        </div>
+        <div class="kpi-card success">
+          <div class="kpi-label">闭环数 / 闭环率</div>
+          <div class="kpi-value">${incidentStats.closedCount}<span class="kpi-unit">单 / ${incidentStats.closedRate.toFixed(1)}%</span></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">平均处置耗时</div>
+          <div class="kpi-value">${incidentStats.avgDisposalHours.toFixed(1)}<span class="kpi-unit">小时</span></div>
+        </div>
+        <div class="kpi-card warn">
+          <div class="kpi-label">超期数 / 超期率</div>
+          <div class="kpi-value">${incidentStats.overdueCount}<span class="kpi-unit">单 / ${incidentStats.overdueRate.toFixed(1)}%</span></div>
+        </div>
+      </div>
+
+      <div class="sub-grid" style="margin-top:16px;">
+        <div class="sub-card">
+          <h4>核心指标</h4>
+          <div class="stat-row"><span class="label">平均反馈次数</span><span class="value">${incidentStats.avgFeedbacks.toFixed(1)} 次</span></div>
+        </div>
+        <div class="sub-card">
+          <h4>处置耗时分布</h4>
+          ${Object.entries(incidentStats.timeDistribution)
+            .map(([bucket, count]) => {
+              const pct = incidentStats.closedCount ? ((count / incidentStats.closedCount) * 100).toFixed(1) : "0";
+              return `<div class="stat-row"><span class="label">${bucket}</span><span class="value">${count} 单 (${pct}%)</span></div>`;
+            })
+            .join("")}
+        </div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <h4 style="font-size:13px;color:#6b7280;margin-bottom:8px;font-weight:500;">按隧道汇总处置效率</h4>
+        <table>
+          <thead><tr><th>隧道名称</th><th style="text-align:center;">处置单总数</th><th style="text-align:center;">闭环数</th><th style="text-align:center;">闭环率(%)</th><th style="text-align:center;">平均耗时(h)</th><th style="text-align:center;">超期数</th><th style="text-align:center;">超期率(%)</th></tr></thead>
+          <tbody>
+            ${Object.entries(incidentStats.byTunnel)
+              .map(([tunnelId, stats]) => {
+                const tunnel = MOCK_TUNNELS.find((t) => t.id === tunnelId);
+                if (!tunnel || stats.total === 0) return "";
+                const closedRate = stats.total ? ((stats.closed / stats.total) * 100).toFixed(1) : "0";
+                const overdueRate = stats.total ? ((stats.overdue / stats.total) * 100).toFixed(1) : "0";
+                return `
+                <tr>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${tunnel.name}</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${stats.total}</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;color:#00C853;">${stats.closed}</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:bold;color:#00C853;">${closedRate}%</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${stats.avgHours.toFixed(1)}</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;color:#FF3B3B;">${stats.overdue}</td>
+                  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:bold;color:#FF3B3B;">${overdueRate}%</td>
+                </tr>`;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+      `
+          : `<div class="empty-hint">报表周期内暂无处置单记录</div>`
+      }
     </div>
     ${drillDownSection}
     `
@@ -1240,102 +1438,378 @@ const Reports: React.FC = () => {
                         <EmptyState title="暂无告警趋势" hint="当前筛选条件下无数据" />
                       )}
                     </>
-                  ) : drillDownAlerts.length > 0 ? (
+                  ) : (
                     <div className="space-y-4">
-                      {[AlertLevel.URGENT, AlertLevel.IMPORTANT, AlertLevel.NORMAL, AlertLevel.INFO].map(
-                        (level) => {
-                          const list = drillDownAlertsByLevel[level];
-                          if (list.length === 0) return null;
-                          const lvlCfg = AlertLevelConfig[level];
-                          return (
-                            <div key={level}>
-                              <div className="flex items-center gap-2 mb-2">
-                                <span
-                                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                                  style={{ backgroundColor: lvlCfg.color }}
-                                />
-                                <span className="text-sm font-semibold" style={{ color: lvlCfg.color }}>
-                                  {lvlCfg.label}
+                      <div className="flex gap-1 p-1 bg-bg-elevated/50 rounded-lg w-fit">
+                        <button
+                          onClick={() => setDrillDownTab("alerts")}
+                          className={cn(
+                            "flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                            drillDownTab === "alerts"
+                              ? "bg-bg-card text-accent shadow-sm border border-border/50"
+                              : "text-text-secondary hover:text-text-primary"
+                          )}
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          告警明细
+                          <span className="text-[10px] px-1.5 py-px rounded bg-bg-elevated text-text-muted font-number">
+                            {drillDownAlerts.length}
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => setDrillDownTab("incidents")}
+                          className={cn(
+                            "flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                            drillDownTab === "incidents"
+                              ? "bg-bg-card text-accent shadow-sm border border-border/50"
+                              : "text-text-secondary hover:text-text-primary"
+                          )}
+                        >
+                          <Activity className="w-3.5 h-3.5" />
+                          关联处置分析
+                          <span className="text-[10px] px-1.5 py-px rounded bg-bg-elevated text-text-muted font-number">
+                            {drillDownIncidents.length}
+                          </span>
+                        </button>
+                      </div>
+
+                      {drillDownTab === "alerts" ? (
+                        drillDownAlerts.length > 0 ? (
+                          <div className="space-y-4">
+                            {[AlertLevel.URGENT, AlertLevel.IMPORTANT, AlertLevel.NORMAL, AlertLevel.INFO].map(
+                              (level) => {
+                                const list = drillDownAlertsByLevel[level];
+                                if (list.length === 0) return null;
+                                const lvlCfg = AlertLevelConfig[level];
+                                return (
+                                  <div key={level}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                                        style={{ backgroundColor: lvlCfg.color }}
+                                      />
+                                      <span className="text-sm font-semibold" style={{ color: lvlCfg.color }}>
+                                        {lvlCfg.label}
+                                      </span>
+                                      <span className="text-xs text-text-muted font-number">({list.length})</span>
+                                    </div>
+                                    <div className="rounded-lg border border-border/50 overflow-hidden">
+                                      <table className="w-full text-sm">
+                                        <thead>
+                                          <tr className="bg-bg-elevated/60 text-text-secondary text-xs">
+                                            <th className="text-left px-3 py-2 font-medium">告警ID</th>
+                                            <th className="text-left px-3 py-2 font-medium">标题</th>
+                                            <th className="text-left px-3 py-2 font-medium">等级</th>
+                                            <th className="text-left px-3 py-2 font-medium">状态</th>
+                                            <th className="text-left px-3 py-2 font-medium">所属隧道</th>
+                                            <th className="text-left px-3 py-2 font-medium">设备</th>
+                                            <th className="text-left px-3 py-2 font-medium">处置状态</th>
+                                            <th className="text-left px-3 py-2 font-medium">产生时间</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {list.map((a) => {
+                                            const stCfg = AlertStatusConfig[a.status];
+                                            const hasIncident = !!a.relatedIncidentId;
+                                            return (
+                                              <tr
+                                                key={a.id}
+                                                className="border-t border-border/30 hover:bg-bg-elevated/30 transition-colors"
+                                              >
+                                                <td className="px-3 py-2 font-number text-xs text-text-secondary">{a.id}</td>
+                                                <td className="px-3 py-2 text-text-primary">{a.title}</td>
+                                                <td className="px-3 py-2">
+                                                  <span
+                                                    className="text-[11px] px-1.5 py-px rounded"
+                                                    style={{
+                                                      backgroundColor: lvlCfg.color + "20",
+                                                      color: lvlCfg.color,
+                                                      border: `1px solid ${lvlCfg.color}40`,
+                                                    }}
+                                                  >
+                                                    {lvlCfg.label}
+                                                  </span>
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                  <span
+                                                    className="text-[11px] px-1.5 py-px rounded"
+                                                    style={{
+                                                      backgroundColor: stCfg.color + "20",
+                                                      color: stCfg.color,
+                                                    }}
+                                                  >
+                                                    {stCfg.label}
+                                                  </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-text-secondary text-xs">{a.tunnelName || "-"}</td>
+                                                <td className="px-3 py-2 text-text-secondary text-xs">{a.deviceName}</td>
+                                                <td className="px-3 py-2">
+                                                  {hasIncident ? (
+                                                    <span className="text-[11px] px-1.5 py-px rounded bg-success/15 text-success border border-success/40">
+                                                      已关联处置单
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-[11px] px-1.5 py-px rounded bg-bg-elevated text-text-muted border border-border/40">
+                                                      未关联
+                                                    </span>
+                                                  )}
+                                                </td>
+                                                <td className="px-3 py-2 text-text-secondary text-xs font-number">
+                                                  {a.createdAt}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            )}
+                          </div>
+                        ) : (
+                          <EmptyState title="当日无告警" hint={`${drillDownDate} 当天没有产生告警记录`} />
+                        )
+                      ) : drillDownIncidents.length > 0 ? (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-4 gap-3">
+                            <Card corner accent className="p-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-text-secondary flex items-center gap-1">
+                                  <Timer className="w-3.5 h-3.5" />
+                                  平均处置耗时
                                 </span>
-                                <span className="text-xs text-text-muted font-number">({list.length})</span>
                               </div>
-                              <div className="rounded-lg border border-border/50 overflow-hidden">
-                                <table className="w-full text-sm">
-                                  <thead>
-                                    <tr className="bg-bg-elevated/60 text-text-secondary text-xs">
-                                      <th className="text-left px-3 py-2 font-medium">告警ID</th>
-                                      <th className="text-left px-3 py-2 font-medium">标题</th>
-                                      <th className="text-left px-3 py-2 font-medium">等级</th>
-                                      <th className="text-left px-3 py-2 font-medium">状态</th>
-                                      <th className="text-left px-3 py-2 font-medium">所属隧道</th>
-                                      <th className="text-left px-3 py-2 font-medium">设备</th>
-                                      <th className="text-left px-3 py-2 font-medium">处置状态</th>
-                                      <th className="text-left px-3 py-2 font-medium">产生时间</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {list.map((a) => {
-                                      const stCfg = AlertStatusConfig[a.status];
-                                      const hasIncident = !!a.relatedIncidentId;
-                                      return (
-                                        <tr
-                                          key={a.id}
-                                          className="border-t border-border/30 hover:bg-bg-elevated/30 transition-colors"
-                                        >
-                                          <td className="px-3 py-2 font-number text-xs text-text-secondary">{a.id}</td>
-                                          <td className="px-3 py-2 text-text-primary">{a.title}</td>
-                                          <td className="px-3 py-2">
-                                            <span
-                                              className="text-[11px] px-1.5 py-px rounded"
-                                              style={{
-                                                backgroundColor: lvlCfg.color + "20",
-                                                color: lvlCfg.color,
-                                                border: `1px solid ${lvlCfg.color}40`,
-                                              }}
-                                            >
-                                              {lvlCfg.label}
-                                            </span>
-                                          </td>
-                                          <td className="px-3 py-2">
-                                            <span
-                                              className="text-[11px] px-1.5 py-px rounded"
-                                              style={{
-                                                backgroundColor: stCfg.color + "20",
-                                                color: stCfg.color,
-                                              }}
-                                            >
-                                              {stCfg.label}
-                                            </span>
-                                          </td>
-                                          <td className="px-3 py-2 text-text-secondary text-xs">{a.tunnelName || "-"}</td>
-                                          <td className="px-3 py-2 text-text-secondary text-xs">{a.deviceName}</td>
-                                          <td className="px-3 py-2">
-                                            {hasIncident ? (
-                                              <span className="text-[11px] px-1.5 py-px rounded bg-success/15 text-success border border-success/40">
-                                                已关联处置单
-                                              </span>
-                                            ) : (
-                                              <span className="text-[11px] px-1.5 py-px rounded bg-bg-elevated text-text-muted border border-border/40">
-                                                未关联
-                                              </span>
-                                            )}
-                                          </td>
-                                          <td className="px-3 py-2 text-text-secondary text-xs font-number">
-                                            {a.createdAt}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
+                              <DataNumber
+                                value={incidentStats.avgDisposalHours}
+                                suffix=" h"
+                                size="lg"
+                                color="accent"
+                                digits={1}
+                              />
+                            </Card>
+                            <Card corner accent className="p-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-text-secondary flex items-center gap-1">
+                                  <MessageSquare className="w-3.5 h-3.5" />
+                                  平均反馈次数
+                                </span>
                               </div>
+                              <DataNumber
+                                value={incidentStats.avgFeedbacks}
+                                suffix=" 次"
+                                size="lg"
+                                color="info"
+                                digits={1}
+                              />
+                            </Card>
+                            <Card corner accent className="p-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-text-secondary flex items-center gap-1">
+                                  <CheckCircle className="w-3.5 h-3.5" />
+                                  闭环率
+                                </span>
+                              </div>
+                              <DataNumber
+                                value={incidentStats.closedRate}
+                                suffix=" %"
+                                size="lg"
+                                color="success"
+                                digits={1}
+                              />
+                            </Card>
+                            <Card corner accent className="p-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-text-secondary flex items-center gap-1">
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  超期率
+                                </span>
+                              </div>
+                              <DataNumber
+                                value={incidentStats.overdueRate}
+                                suffix=" %"
+                                size="lg"
+                                color={incidentStats.overdueRate > 20 ? "danger" : "warning"}
+                                digits={1}
+                              />
+                            </Card>
+                          </div>
+
+                          <div className="rounded-lg border border-border/50 overflow-hidden">
+                            <div className="bg-bg-elevated/60 px-3 py-2 border-b border-border/50">
+                              <span className="text-sm font-medium text-text-primary flex items-center gap-1.5">
+                                <Target className="w-4 h-4 text-accent" />
+                                处置单明细
+                              </span>
                             </div>
-                          );
-                        }
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="bg-bg-elevated/30 text-text-secondary text-xs">
+                                    <th className="text-left px-3 py-2 font-medium">处置单编号</th>
+                                    <th className="text-left px-3 py-2 font-medium">来源告警标题</th>
+                                    <th className="text-left px-3 py-2 font-medium">优先级</th>
+                                    <th className="text-left px-3 py-2 font-medium">负责人</th>
+                                    <th className="text-left px-3 py-2 font-medium">处置耗时(h)</th>
+                                    <th className="text-left px-3 py-2 font-medium">反馈次数</th>
+                                    <th className="text-left px-3 py-2 font-medium">是否闭环</th>
+                                    <th className="text-left px-3 py-2 font-medium">是否超期</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {drillDownIncidents.map((inc) => {
+                                    const lvlCfg = AlertLevelConfig[inc.priority];
+                                    const isClosed = inc.status === "closed";
+                                    const overdue = isOverdue(inc);
+                                    const disposalHours = getDisposalHours(inc);
+                                    return (
+                                      <tr
+                                        key={inc.id}
+                                        className="border-t border-border/30 hover:bg-bg-elevated/30 transition-colors"
+                                      >
+                                        <td className="px-3 py-2 font-number text-xs text-accent font-medium">{inc.code}</td>
+                                        <td className="px-3 py-2 text-text-primary">{inc.title}</td>
+                                        <td className="px-3 py-2">
+                                          <span
+                                            className="text-[11px] px-1.5 py-px rounded"
+                                            style={{
+                                              backgroundColor: lvlCfg.color + "20",
+                                              color: lvlCfg.color,
+                                              border: `1px solid ${lvlCfg.color}40`,
+                                            }}
+                                          >
+                                            {lvlCfg.label}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 text-text-secondary text-xs">{inc.assignee}</td>
+                                        <td className="px-3 py-2 font-number text-text-primary">
+                                          {disposalHours.toFixed(1)}
+                                        </td>
+                                        <td className="px-3 py-2 text-center font-number">{inc.feedbacks.length}</td>
+                                        <td className="px-3 py-2">
+                                          {isClosed ? (
+                                            <span className="text-[11px] px-1.5 py-px rounded bg-success/15 text-success border border-success/40">
+                                              已闭环
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] px-1.5 py-px rounded bg-warning/15 text-warning border border-warning/40">
+                                              处置中
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          {overdue ? (
+                                            <span className="text-[11px] px-1.5 py-px rounded bg-danger/15 text-danger border border-danger/40">
+                                              超期
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] px-1.5 py-px rounded bg-success/15 text-success border border-success/40">
+                                              正常
+                                            </span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-border/50 overflow-hidden">
+                            <div className="bg-bg-elevated/60 px-3 py-2 border-b border-border/50">
+                              <span className="text-sm font-medium text-text-primary flex items-center gap-1.5">
+                                <BarChart3 className="w-4 h-4 text-accent" />
+                                处置耗时分布
+                              </span>
+                            </div>
+                            <div className="p-4 bg-bg-card/50">
+                              <ReactECharts
+                                option={{
+                                  tooltip: {
+                                    trigger: "axis",
+                                    axisPointer: { type: "shadow" },
+                                    formatter: "{b}: {c} 单",
+                                  },
+                                  grid: {
+                                    left: "3%",
+                                    right: "4%",
+                                    bottom: "3%",
+                                    top: "10%",
+                                    containLabel: true,
+                                  },
+                                  xAxis: {
+                                    type: "category",
+                                    data: ["0-2h", "2-6h", "6-12h", "12-24h", ">24h"],
+                                    axisLabel: {
+                                      color: "#6b7280",
+                                      fontSize: 11,
+                                    },
+                                    axisLine: {
+                                      lineStyle: { color: "#e2e8f0" },
+                                    },
+                                  },
+                                  yAxis: {
+                                    type: "value",
+                                    name: "处置单数量",
+                                    nameTextStyle: {
+                                      color: "#6b7280",
+                                      fontSize: 11,
+                                    },
+                                    axisLabel: {
+                                      color: "#6b7280",
+                                      fontSize: 11,
+                                    },
+                                    splitLine: {
+                                      lineStyle: {
+                                        color: "#e2e8f0",
+                                        type: "dashed",
+                                      },
+                                    },
+                                  },
+                                  series: [
+                                    {
+                                      name: "处置单数量",
+                                      type: "bar",
+                                      data: [
+                                        incidentStats.timeDistribution["0-2h"],
+                                        incidentStats.timeDistribution["2-6h"],
+                                        incidentStats.timeDistribution["6-12h"],
+                                        incidentStats.timeDistribution["12-24h"],
+                                        incidentStats.timeDistribution[">24h"],
+                                      ],
+                                      itemStyle: {
+                                        color: {
+                                          type: "linear",
+                                          x: 0,
+                                          y: 0,
+                                          x2: 0,
+                                          y2: 1,
+                                          colorStops: [
+                                            { offset: 0, color: "#00D4FF" },
+                                            { offset: 1, color: "#00C853" },
+                                          ],
+                                        },
+                                        borderRadius: [6, 6, 0, 0],
+                                      },
+                                      barWidth: "40%",
+                                    },
+                                  ],
+                                }}
+                                style={{ height: "240px" }}
+                                opts={{ renderer: "canvas" }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <EmptyState
+                          title="当日无处置单"
+                          hint={`${drillDownDate} 当天没有关联的处置单记录`}
+                        />
                       )}
                     </div>
-                  ) : (
-                    <EmptyState title="当日无告警" hint={`${drillDownDate} 当天没有产生告警记录`} />
                   )}
                 </Card>
               )}

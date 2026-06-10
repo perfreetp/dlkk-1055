@@ -7,7 +7,7 @@ interface DataNumberProps {
   prefix?: string;
   label?: string;
   size?: "sm" | "md" | "lg" | "xl";
-  color?: "default" | "accent" | "success" | "danger" | "warning";
+  color?: "default" | "accent" | "success" | "danger" | "warning" | "info";
   glow?: boolean;
   className?: string;
   digits?: number;
@@ -26,6 +26,7 @@ const colorMap = {
   success: "text-success",
   danger: "text-danger",
   warning: "text-warning",
+  info: "text-text-secondary",
 };
 
 export const DataNumber: React.FC<DataNumberProps> = ({

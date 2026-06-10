@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   FileWarning,
   Clock,
@@ -37,9 +38,10 @@ import {
   DEADLINE_ORDER,
   DeadlineStatus,
 } from "@/utils/format";
-import { Incident, AlertLevel, AlertStatus } from "@/types";
+import { Incident, Alert, Device, AlertLevel, AlertStatus } from "@/types";
+import { navigateToAlert, navigateToDevice } from "@/utils/navigate";
 
-type TabKey = "list" | "tracking";
+type TabKey = "list" | "tracking" | "collaboration";
 
 const PHASES = ["任务创建", "现场到场", "问题处置", "验收闭环"];
 
@@ -54,6 +56,8 @@ const INCIDENT_STATUS_CONFIG: Record<
 };
 
 const Incidents: React.FC = () => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabKey>("list");
   const { incidents, createIncident, updateIncidentPhase, addFeedback, alerts, devices } = useMonitorStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -75,11 +79,36 @@ const Incidents: React.FC = () => {
     tunnelId: "",
     deviceId: "",
   });
+  const [trackingTunnelFilter, setTrackingTunnelFilter] = useState<string>("all");
+  const [trackingAssigneeFilter, setTrackingAssigneeFilter] = useState<string>("all");
+  const [trackingDeadlineFilter, setTrackingDeadlineFilter] = useState<string>("all");
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick((t) => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const id = searchParams.get("id");
+    if (id) {
+      const incident = incidents.find((i) => i.id === id);
+      if (incident) {
+        setExpandedId(id);
+      }
+    } else {
+      setExpandedId(null);
+    }
+  }, [searchParams, incidents]);
+
+  const handleToggleExpand = (id: string) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      setSearchParams({});
+    } else {
+      setExpandedId(id);
+      setSearchParams({ id });
+    }
+  };
 
   const filteredIncidents = useMemo(() => {
     return incidents.filter((inc) => {
@@ -185,6 +214,7 @@ const Incidents: React.FC = () => {
   const tabs = [
     { key: "list" as TabKey, label: "处置单列表", icon: FileWarning },
     { key: "tracking" as TabKey, label: "未关闭追踪", icon: Clock },
+    { key: "collaboration" as TabKey, label: "协同看板", icon: Handshake },
   ];
 
   return (
@@ -209,7 +239,7 @@ const Incidents: React.FC = () => {
       <div className="flex items-center gap-1 shrink-0 px-2">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          const count = tab.key === "tracking" ? unclosedIncidents.length : incidents.length;
+          const count = tab.key === "tracking" ? unclosedIncidents.length : tab.key === "collaboration" ? unclosedIncidents.length : incidents.length;
           return (
             <button
               key={tab.key}
@@ -314,7 +344,43 @@ const Incidents: React.FC = () => {
         )}
 
         {activeTab === "tracking" && (
-          <TrackingView incidents={unclosedIncidents} nowTick={nowTick} />
+          <TrackingView 
+            incidents={unclosedIncidents} 
+            nowTick={nowTick}
+            externalTunnelFilter={trackingTunnelFilter}
+            externalAssigneeFilter={trackingAssigneeFilter}
+            externalDeadlineFilter={trackingDeadlineFilter}
+            onTunnelFilterChange={setTrackingTunnelFilter}
+            onAssigneeFilterChange={setTrackingAssigneeFilter}
+            onDeadlineFilterChange={setTrackingDeadlineFilter}
+          />
+        )}
+
+        {activeTab === "collaboration" && (
+          <CollaborationView 
+            incidents={unclosedIncidents}
+            alerts={alerts}
+            devices={devices}
+            nowTick={nowTick}
+            onTunnelClick={(tunnelId) => {
+              setTrackingTunnelFilter(tunnelId);
+              setTrackingAssigneeFilter("all");
+              setTrackingDeadlineFilter("all");
+              setActiveTab("tracking");
+            }}
+            onDeviceClick={(deviceId) => {
+              setTrackingTunnelFilter("all");
+              setTrackingAssigneeFilter("all");
+              setTrackingDeadlineFilter("all");
+              setActiveTab("tracking");
+            }}
+            onAssigneeClick={(assignee) => {
+              setTrackingAssigneeFilter(assignee);
+              setTrackingTunnelFilter("all");
+              setTrackingDeadlineFilter("all");
+              setActiveTab("tracking");
+            }}
+          />
         )}
 
         {activeTab === "list" && (
@@ -324,9 +390,10 @@ const Incidents: React.FC = () => {
                 key={inc.id}
                 incident={inc}
                 expanded={expandedId === inc.id}
-                onToggle={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
+                onToggle={() => handleToggleExpand(inc.id)}
                 onAdvance={() => updateIncidentPhase(inc.id)}
                 onAddFeedback={() => setShowFeedbackModal(inc.id)}
+                navigate={navigate}
               />
             ))}
             {displayList.length === 0 && (
@@ -602,7 +669,8 @@ const IncidentCard: React.FC<{
   onToggle: () => void;
   onAdvance: () => void;
   onAddFeedback: () => void;
-}> = ({ incident, expanded, onToggle, onAdvance, onAddFeedback }) => {
+  navigate: ReturnType<typeof useNavigate>;
+}> = ({ incident, expanded, onToggle, onAdvance, onAddFeedback, navigate }) => {
   const { alerts } = useMonitorStore();
   const relatedAlert = incident.alertId ? alerts.find((a) => a.id === incident.alertId) : null;
   const statusCfg = INCIDENT_STATUS_CONFIG[incident.status];
@@ -717,8 +785,7 @@ const IncidentCard: React.FC<{
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  console.log("跳转到告警:", incident.alertId);
-                  window.location.hash = "#/alerts";
+                  navigateToAlert(navigate, incident.alertId);
                 }}
                 className="p-1.5 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
                 title="查看来源告警"
@@ -729,7 +796,7 @@ const IncidentCard: React.FC<{
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    console.log("查看关联设备:", relatedAlert.deviceId);
+                    navigateToDevice(navigate, relatedAlert.deviceId);
                   }}
                   className="p-1.5 rounded hover:bg-accent/15 transition-colors text-text-muted hover:text-accent"
                   title="查看关联设备"
@@ -899,13 +966,59 @@ const IncidentCard: React.FC<{
   );
 };
 
-const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ incidents, nowTick }) => {
+const TrackingView: React.FC<{ 
+  incidents: Incident[]; 
+  nowTick: number;
+  externalTunnelFilter?: string;
+  externalAssigneeFilter?: string;
+  externalDeadlineFilter?: string;
+  onTunnelFilterChange?: (value: string) => void;
+  onAssigneeFilterChange?: (value: string) => void;
+  onDeadlineFilterChange?: (value: string) => void;
+}> = ({ 
+  incidents, 
+  nowTick, 
+  externalTunnelFilter, 
+  externalAssigneeFilter, 
+  externalDeadlineFilter,
+  onTunnelFilterChange,
+  onAssigneeFilterChange,
+  onDeadlineFilterChange,
+}) => {
   const { alerts } = useMonitorStore();
   const [groupDimension, setGroupDimension] = useState<"deadline" | "priority" | "assignee" | "handover">("deadline");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [tunnelFilter, setTunnelFilter] = useState<string>("all");
-  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
-  const [deadlineFilter, setDeadlineFilter] = useState<string>("all");
+  const [internalTunnelFilter, setInternalTunnelFilter] = useState<string>("all");
+  const [internalAssigneeFilter, setInternalAssigneeFilter] = useState<string>("all");
+  const [internalDeadlineFilter, setInternalDeadlineFilter] = useState<string>("all");
+
+  const tunnelFilter = externalTunnelFilter !== undefined ? externalTunnelFilter : internalTunnelFilter;
+  const assigneeFilter = externalAssigneeFilter !== undefined ? externalAssigneeFilter : internalAssigneeFilter;
+  const deadlineFilter = externalDeadlineFilter !== undefined ? externalDeadlineFilter : internalDeadlineFilter;
+
+  const handleTunnelFilterChange = (value: string) => {
+    if (onTunnelFilterChange) {
+      onTunnelFilterChange(value);
+    } else {
+      setInternalTunnelFilter(value);
+    }
+  };
+
+  const handleAssigneeFilterChange = (value: string) => {
+    if (onAssigneeFilterChange) {
+      onAssigneeFilterChange(value);
+    } else {
+      setInternalAssigneeFilter(value);
+    }
+  };
+
+  const handleDeadlineFilterChange = (value: string) => {
+    if (onDeadlineFilterChange) {
+      onDeadlineFilterChange(value);
+    } else {
+      setInternalDeadlineFilter(value);
+    }
+  };
 
   const incidentTunnelMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -1140,7 +1253,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
             <span className="text-xs text-text-muted">隧道</span>
             <select
               value={tunnelFilter}
-              onChange={(e) => setTunnelFilter(e.target.value)}
+              onChange={(e) => handleTunnelFilterChange(e.target.value)}
               className="px-2 py-1 text-xs rounded bg-bg-elevated border border-border text-text-primary focus:outline-none focus:border-accent/50"
             >
               <option value="all">全部隧道</option>
@@ -1153,7 +1266,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
             <span className="text-xs text-text-muted">负责人</span>
             <select
               value={assigneeFilter}
-              onChange={(e) => setAssigneeFilter(e.target.value)}
+              onChange={(e) => handleAssigneeFilterChange(e.target.value)}
               className="px-2 py-1 text-xs rounded bg-bg-elevated border border-border text-text-primary focus:outline-none focus:border-accent/50 max-w-[140px]"
             >
               <option value="all">全部负责人</option>
@@ -1172,7 +1285,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
               ].map((opt) => (
                 <button
                   key={opt.key}
-                  onClick={() => setDeadlineFilter(opt.key)}
+                  onClick={() => handleDeadlineFilterChange(opt.key)}
                   className={cn(
                     "px-2.5 py-1 text-[11px] rounded border transition-all",
                     deadlineFilter === opt.key
@@ -1191,7 +1304,7 @@ const TrackingView: React.FC<{ incidents: Incident[]; nowTick: number }> = ({ in
           </div>
           {(tunnelFilter !== "all" || assigneeFilter !== "all" || deadlineFilter !== "all") && (
             <button
-              onClick={() => { setTunnelFilter("all"); setAssigneeFilter("all"); setDeadlineFilter("all"); }}
+              onClick={() => { handleTunnelFilterChange("all"); handleAssigneeFilterChange("all"); handleDeadlineFilterChange("all"); }}
               className="px-2 py-1 text-[11px] rounded border border-border text-text-muted hover:text-text-primary hover:border-border-light transition-colors flex items-center gap-1"
             >
               <X className="w-3 h-3" />
@@ -1737,6 +1850,417 @@ const TrackingIncidentItem: React.FC<{ incident: Incident }> = ({ incident }) =>
         )}
       </div>
     </div>
+  );
+};
+
+interface TunnelAggregate {
+  tunnelId: string;
+  tunnelName: string;
+  unclosedCount: number;
+  overdueCount: number;
+  topDevices: { deviceId: string; deviceName: string; alertCount: number }[];
+}
+
+interface DeviceAggregate {
+  deviceId: string;
+  deviceName: string;
+  tunnelId: string;
+  tunnelName: string;
+  alert7dCount: number;
+  unclosedIncidentCount: number;
+  lastAlertTime: string;
+}
+
+interface AssigneeAggregate {
+  name: string;
+  unclosedCount: number;
+  overdueCount: number;
+  within24hCount: number;
+  avgHandleHours: number;
+  loadPercent: number;
+}
+
+const CollaborationView: React.FC<{
+  incidents: Incident[];
+  alerts: Alert[];
+  devices: Device[];
+  nowTick: number;
+  onTunnelClick: (tunnelId: string) => void;
+  onDeviceClick: (deviceId: string) => void;
+  onAssigneeClick: (assignee: string) => void;
+}> = ({ incidents, alerts, devices, nowTick, onTunnelClick, onDeviceClick, onAssigneeClick }) => {
+  const tunnelData = useMemo<TunnelAggregate[]>(() => {
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+    return MOCK_TUNNELS.map((tunnel) => {
+      const tunnelIncidents = incidents.filter((inc) => {
+        const incTunnelId = inc.tunnelId || (inc.alertId ? alerts.find((a) => a.id === inc.alertId)?.tunnelId : undefined);
+        return incTunnelId === tunnel.id;
+      });
+
+      const unclosedCount = tunnelIncidents.filter((i) => i.status !== "closed").length;
+      const overdueCount = tunnelIncidents.filter((i) => i.status !== "closed" && getDeadlineStatus(i.deadline) === "overdue").length;
+
+      const deviceAlertCounts: Record<string, { deviceId: string; deviceName: string; count: number }> = {};
+      alerts.forEach((alert) => {
+        if (alert.tunnelId === tunnel.id) {
+          const alertTime = new Date(alert.createdAt).getTime();
+          if (alertTime >= sevenDaysAgo) {
+            if (!deviceAlertCounts[alert.deviceId]) {
+              deviceAlertCounts[alert.deviceId] = {
+                deviceId: alert.deviceId,
+                deviceName: alert.deviceName,
+                count: 0,
+              };
+            }
+            deviceAlertCounts[alert.deviceId].count++;
+          }
+        }
+      });
+
+      const topDevices = Object.values(deviceAlertCounts)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3)
+        .map((d) => ({ deviceId: d.deviceId, deviceName: d.deviceName, alertCount: d.count }));
+
+      return {
+        tunnelId: tunnel.id,
+        tunnelName: tunnel.name,
+        unclosedCount,
+        overdueCount,
+        topDevices,
+      };
+    });
+  }, [incidents, alerts, nowTick]);
+
+  const deviceData = useMemo<DeviceAggregate[]>(() => {
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+    const deviceStats: Record<string, DeviceAggregate> = {};
+
+    alerts.forEach((alert) => {
+      const alertTime = new Date(alert.createdAt).getTime();
+      if (alertTime >= sevenDaysAgo) {
+        if (!deviceStats[alert.deviceId]) {
+          const device = devices.find((d) => d.id === alert.deviceId);
+          deviceStats[alert.deviceId] = {
+            deviceId: alert.deviceId,
+            deviceName: alert.deviceName,
+            tunnelId: alert.tunnelId,
+            tunnelName: alert.tunnelName || device?.tunnelName || "",
+            alert7dCount: 0,
+            unclosedIncidentCount: 0,
+            lastAlertTime: alert.createdAt,
+          };
+        }
+        deviceStats[alert.deviceId].alert7dCount++;
+        if (alert.createdAt > deviceStats[alert.deviceId].lastAlertTime) {
+          deviceStats[alert.deviceId].lastAlertTime = alert.createdAt;
+        }
+      }
+    });
+
+    incidents.forEach((inc) => {
+      if (inc.status !== "closed" && inc.deviceId) {
+        if (deviceStats[inc.deviceId]) {
+          deviceStats[inc.deviceId].unclosedIncidentCount++;
+        }
+      }
+    });
+
+    return Object.values(deviceStats)
+      .sort((a, b) => b.alert7dCount - a.alert7dCount)
+      .slice(0, 10);
+  }, [alerts, incidents, devices, nowTick]);
+
+  const assigneeData = useMemo<AssigneeAggregate[]>(() => {
+    const now = Date.now();
+    const assigneeStats: Record<string, {
+      unclosed: number;
+      overdue: number;
+      within24h: number;
+      totalHandleTime: number;
+      closedCount: number;
+    }> = {};
+
+    incidents.forEach((inc) => {
+      if (!assigneeStats[inc.assignee]) {
+        assigneeStats[inc.assignee] = {
+          unclosed: 0,
+          overdue: 0,
+          within24h: 0,
+          totalHandleTime: 0,
+          closedCount: 0,
+        };
+      }
+
+      if (inc.status !== "closed") {
+        assigneeStats[inc.assignee].unclosed++;
+        const ds = getDeadlineStatus(inc.deadline);
+        if (ds === "overdue") assigneeStats[inc.assignee].overdue++;
+        if (ds === "urgent" || ds === "warning") assigneeStats[inc.assignee].within24h++;
+      } else {
+        const createdAt = new Date(inc.createdAt).getTime();
+        const closedAt = inc.timeline.find((t) => t.status === "验收闭环")?.time;
+        if (closedAt) {
+          const handleTime = (new Date(closedAt).getTime() - createdAt) / (1000 * 60 * 60);
+          assigneeStats[inc.assignee].totalHandleTime += handleTime;
+          assigneeStats[inc.assignee].closedCount++;
+        }
+      }
+    });
+
+    const avgUnclosed = Object.values(assigneeStats).reduce((sum, s) => sum + s.unclosed, 0) / Math.max(1, Object.keys(assigneeStats).length);
+
+    return Object.entries(assigneeStats).map(([name, stats]) => ({
+      name,
+      unclosedCount: stats.unclosed,
+      overdueCount: stats.overdue,
+      within24hCount: stats.within24h,
+      avgHandleHours: stats.closedCount > 0 ? stats.totalHandleTime / stats.closedCount : 0,
+      loadPercent: avgUnclosed > 0 ? Math.min(100, Math.round((stats.unclosed / avgUnclosed) * 50)) : 0,
+    }));
+  }, [incidents, nowTick]);
+
+  return (
+    <div className="flex-1 min-h-0 overflow-hidden flex gap-3">
+      <div className="w-[280px] shrink-0 overflow-y-auto pr-1 space-y-3">
+        <div className="text-xs font-medium text-text-secondary px-1 mb-1 flex items-center gap-1.5">
+          <div className="w-1 h-1 rounded-full bg-accent" />
+          按隧道聚合
+        </div>
+        {tunnelData.map((tunnel) => (
+          <TunnelCard
+            key={tunnel.tunnelId}
+            data={tunnel}
+            onClick={() => onTunnelClick(tunnel.tunnelId)}
+          />
+        ))}
+      </div>
+
+      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+        <div className="text-xs font-medium text-text-secondary px-1 mb-2 flex items-center gap-1.5 shrink-0">
+          <div className="w-1 h-1 rounded-full bg-accent" />
+          反复告警设备 TOP 10
+        </div>
+        <DeviceTable data={deviceData} onRowClick={onDeviceClick} />
+      </div>
+
+      <div className="w-[320px] shrink-0 overflow-y-auto pr-1 space-y-3">
+        <div className="text-xs font-medium text-text-secondary px-1 mb-1 flex items-center gap-1.5">
+          <div className="w-1 h-1 rounded-full bg-accent" />
+          按负责人聚合
+        </div>
+        {assigneeData.map((assignee) => (
+          <AssigneeHeatCard
+            key={assignee.name}
+            data={assignee}
+            onClick={() => onAssigneeClick(assignee.name)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const TunnelCard: React.FC<{ data: TunnelAggregate; onClick: () => void }> = ({ data, onClick }) => {
+  return (
+    <Card corner className="cursor-pointer hover:ring-1 hover:ring-accent/30 transition-all group" onClick={onClick}>
+      <div className="flex items-start justify-between mb-2">
+        <h3 className="font-medium text-sm text-text-primary group-hover:text-accent transition-colors">
+          {data.tunnelName}
+        </h3>
+        <ExternalLink className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors" />
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="p-2 rounded bg-bg-elevated/50 border border-border/30">
+          <div className="text-[10px] text-text-muted mb-0.5">未闭环</div>
+          <div className="font-display text-lg font-bold text-accent">{data.unclosedCount}</div>
+        </div>
+        <div className="p-2 rounded bg-bg-elevated/50 border border-border/30">
+          <div className="text-[10px] text-text-muted mb-0.5">超期</div>
+          <div className={cn(
+            "font-display text-lg font-bold",
+            data.overdueCount > 0 ? "text-danger" : "text-success"
+          )}>
+            {data.overdueCount}
+          </div>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-text-muted">告警频次 Top3</div>
+        {data.topDevices.length === 0 ? (
+          <div className="text-[11px] text-text-muted/70">暂无告警设备</div>
+        ) : (
+          data.topDevices.map((device, idx) => (
+            <div key={device.deviceId} className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={cn(
+                  "w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold",
+                  idx === 0 ? "bg-danger/20 text-danger" :
+                  idx === 1 ? "bg-warning/20 text-warning" :
+                  "bg-info/20 text-info"
+                )}>
+                  {idx + 1}
+                </span>
+                <span className="text-text-secondary truncate">{device.deviceName}</span>
+              </div>
+              <span className="font-number text-text-primary shrink-0">{device.alertCount}次</span>
+            </div>
+          ))
+        )}
+      </div>
+    </Card>
+  );
+};
+
+const DeviceTable: React.FC<{ data: DeviceAggregate[]; onRowClick: (deviceId: string) => void }> = ({ data, onRowClick }) => {
+  return (
+    <Card corner className="flex-1 min-h-0 overflow-hidden flex flex-col">
+      <div className="overflow-x-auto flex-1">
+        <table className="w-full text-sm">
+          <thead className="shrink-0">
+            <tr className="border-b border-border/40 bg-bg-elevated/30">
+              <th className="px-3 py-2 text-left text-[11px] font-medium text-text-secondary">设备名</th>
+              <th className="px-3 py-2 text-left text-[11px] font-medium text-text-secondary">所属隧道</th>
+              <th className="px-3 py-2 text-center text-[11px] font-medium text-text-secondary">近7天告警数</th>
+              <th className="px-3 py-2 text-center text-[11px] font-medium text-text-secondary">关联未闭环处置单</th>
+              <th className="px-3 py-2 text-left text-[11px] font-medium text-text-secondary">最后告警时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-8 text-center text-text-muted text-sm">
+                  暂无反复告警设备
+                </td>
+              </tr>
+            ) : (
+              data.map((row, idx) => (
+                <tr
+                  key={row.deviceId}
+                  onClick={() => onRowClick(row.deviceId)}
+                  className={cn(
+                    "border-b border-border/20 hover:bg-accent/5 cursor-pointer transition-colors",
+                    idx % 2 === 0 ? "bg-bg-card/30" : "bg-transparent"
+                  )}
+                >
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold",
+                        idx === 0 ? "bg-danger/20 text-danger" :
+                        idx === 1 ? "bg-warning/20 text-warning" :
+                        idx === 2 ? "bg-info/20 text-info" :
+                        "bg-text-muted/10 text-text-muted"
+                      )}>
+                        {idx + 1}
+                      </span>
+                      <span className="text-text-primary font-medium">{row.deviceName}</span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-text-secondary">{row.tunnelName}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={cn(
+                      "font-display font-bold",
+                      row.alert7dCount >= 10 ? "text-danger" :
+                      row.alert7dCount >= 5 ? "text-warning" :
+                      "text-accent"
+                    )}>
+                      {row.alert7dCount}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={cn(
+                      "font-display",
+                      row.unclosedIncidentCount > 0 ? "text-danger font-medium" : "text-text-muted"
+                    )}>
+                      {row.unclosedIncidentCount}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-text-muted text-xs">{timeAgo(row.lastAlertTime)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+};
+
+const AssigneeHeatCard: React.FC<{ data: AssigneeAggregate; onClick: () => void }> = ({ data, onClick }) => {
+  const getHeatColor = (percent: number) => {
+    if (percent >= 80) return { bg: "bg-danger/25", bar: "bg-danger", text: "text-danger" };
+    if (percent >= 50) return { bg: "bg-warning/25", bar: "bg-warning", text: "text-warning" };
+    if (percent >= 30) return { bg: "bg-info/25", bar: "bg-info", text: "text-info" };
+    return { bg: "bg-success/25", bar: "bg-success", text: "text-success" };
+  };
+
+  const heatColor = getHeatColor(data.loadPercent);
+
+  return (
+    <Card corner className="cursor-pointer hover:ring-1 hover:ring-accent/30 transition-all group" onClick={onClick}>
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center">
+            <User className="w-4 h-4 text-accent" />
+          </div>
+          <div>
+            <h3 className="font-medium text-sm text-text-primary group-hover:text-accent transition-colors">
+              {data.name}
+            </h3>
+          </div>
+        </div>
+        <ExternalLink className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors" />
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 mb-3">
+        <div className={cn("p-1.5 rounded text-center", heatColor.bg)}>
+          <div className="text-[9px] text-text-muted mb-0.5">未闭环</div>
+          <div className={cn("font-display text-base font-bold", heatColor.text)}>{data.unclosedCount}</div>
+        </div>
+        <div className="p-1.5 rounded text-center bg-bg-elevated/50 border border-border/30">
+          <div className="text-[9px] text-text-muted mb-0.5">超期</div>
+          <div className={cn(
+            "font-display text-base font-bold",
+            data.overdueCount > 0 ? "text-danger" : "text-success"
+          )}>
+            {data.overdueCount}
+          </div>
+        </div>
+        <div className="p-1.5 rounded text-center bg-bg-elevated/50 border border-border/30">
+          <div className="text-[9px] text-text-muted mb-0.5">24h内到期</div>
+          <div className={cn(
+            "font-display text-base font-bold",
+            data.within24hCount > 0 ? "text-warning" : "text-text-muted"
+          )}>
+            {data.within24hCount}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-text-muted">平均处置耗时</span>
+          <span className="font-number text-text-primary">{data.avgHandleHours.toFixed(1)}h</span>
+        </div>
+        <div>
+          <div className="flex items-center justify-between text-[10px] mb-1">
+            <span className="text-text-muted">负载热力</span>
+            <span className={cn("font-medium", heatColor.text)}>{data.loadPercent}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-border/30 overflow-hidden">
+            <div
+              className={cn("h-full rounded-full transition-all", heatColor.bar)}
+              style={{ width: `${data.loadPercent}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 };
 

@@ -14,12 +14,14 @@ import {
 } from "@/data/mockData";
 import {
   Alert,
+  AlertProcessRecord,
   AlertStatus,
   Device,
   DeviceMaintenanceRecord,
   DeviceStatus,
   EnvironmentData,
   Incident,
+  IncidentTimelineItem,
   InspectionTask,
   TrafficData,
 } from "@/types";
@@ -52,6 +54,40 @@ interface MonitorState {
   maybeGenerateNewAlert: () => void;
 }
 
+function initializeStoreData() {
+  const initAlerts = [...MOCK_ALERTS];
+  const initIncidents = MOCK_INCIDENTS.map((inc) => {
+    const updatedTimeline = [...inc.timeline];
+    if (updatedTimeline.length > 0 && !updatedTimeline[0].remark) {
+      updatedTimeline[0] = {
+        ...updatedTimeline[0],
+        remark: inc.sourceType === "alert" ? "由告警自动生成处置单" : "手工登记处置单",
+      };
+    }
+    return { ...inc, timeline: updatedTimeline };
+  });
+
+  initIncidents.forEach((inc) => {
+    if (inc.sourceType === "alert" && inc.alertId) {
+      const alertIndex = initAlerts.findIndex((a) => a.id === inc.alertId);
+      if (alertIndex !== -1) {
+        const alert = initAlerts[alertIndex];
+        const updatedAlert = {
+          ...alert,
+          relatedIncidentId: inc.id,
+        };
+        if (inc.status === "closed" && alert.status !== AlertStatus.CLOSED) {
+          updatedAlert.status = AlertStatus.CLOSED;
+          updatedAlert.closedAt = inc.timeline[inc.timeline.length - 1]?.time || formatDateTime(new Date());
+        }
+        initAlerts[alertIndex] = updatedAlert;
+      }
+    }
+  });
+
+  return { alerts: initAlerts, incidents: initIncidents };
+}
+
 export const useMonitorStore = create<MonitorState>()(
   persist(
     (set, get) => {
@@ -66,10 +102,12 @@ export const useMonitorStore = create<MonitorState>()(
       initTraffic["all"] = getLatestTraffic();
       initEnv["all"] = getLatestEnvironment();
 
+      const { alerts: initAlerts, incidents: initIncidents } = initializeStoreData();
+
       return {
-        alerts: MOCK_ALERTS,
+        alerts: initAlerts,
         devices: MOCK_DEVICES,
-        incidents: MOCK_INCIDENTS,
+        incidents: initIncidents,
         inspectionTasks: MOCK_INSPECTION_TASKS,
         maintenanceRecords: MOCK_MAINTENANCE_RECORDS,
         latestTraffic: initTraffic,
@@ -109,28 +147,38 @@ export const useMonitorStore = create<MonitorState>()(
         closeAlert: (id) =>
           set((s) => {
             const targetAlert = s.alerts.find((a) => a.id === id);
+            const now = formatDateTime(new Date());
+            const alertProcessRecord: AlertProcessRecord = {
+              time: now,
+              operator: "系统",
+              content: "告警已闭环",
+              type: "system",
+            };
             const updatedAlerts = s.alerts.map((a) =>
               a.id === id
-                ? { ...a, status: AlertStatus.CLOSED, closedAt: formatDateTime(new Date()) }
+                ? {
+                    ...a,
+                    status: AlertStatus.CLOSED,
+                    closedAt: now,
+                    processRecords: [...(a.processRecords || []), alertProcessRecord],
+                  }
                 : a
             );
             let updatedIncidents = s.incidents;
             if (targetAlert?.relatedIncidentId) {
+              const incidentTimelineItem: IncidentTimelineItem = {
+                time: now,
+                status: "验收闭环",
+                operator: "系统",
+                remark: "关联告警已闭环，自动同步关闭处置单",
+              };
               updatedIncidents = s.incidents.map((inc) =>
                 inc.id === targetAlert.relatedIncidentId
                   ? {
                       ...inc,
                       status: "closed" as const,
                       phase: 4,
-                      timeline: [
-                        ...inc.timeline,
-                        {
-                          time: formatDateTime(new Date()),
-                          status: "验收闭环",
-                          operator: "系统",
-                          remark: "关联告警已闭环，自动同步关闭处置单",
-                        },
-                      ],
+                      timeline: [...inc.timeline, incidentTimelineItem],
                     }
                   : inc
               );
@@ -229,6 +277,7 @@ export const useMonitorStore = create<MonitorState>()(
                 : nextPhase === 4
                 ? "closed"
                 : "pending";
+            const now = formatDateTime(new Date());
 
             const updatedIncidents = s.incidents.map((inc) => {
               if (inc.id !== id) return inc;
@@ -239,7 +288,7 @@ export const useMonitorStore = create<MonitorState>()(
                 timeline: [
                   ...inc.timeline,
                   {
-                    time: formatDateTime(new Date()),
+                    time: now,
                     status: phases[nextPhase - 1],
                     operator: inc.assignee,
                   },
@@ -249,9 +298,20 @@ export const useMonitorStore = create<MonitorState>()(
 
             let updatedAlerts = s.alerts;
             if (nextPhase === 4 && target?.alertId) {
+              const alertProcessRecord: AlertProcessRecord = {
+                time: now,
+                operator: "系统",
+                content: "关联处置单已闭环，自动同步关闭告警",
+                type: "system",
+              };
               updatedAlerts = s.alerts.map((a) =>
                 a.id === target.alertId
-                  ? { ...a, status: AlertStatus.CLOSED, closedAt: formatDateTime(new Date()) }
+                  ? {
+                      ...a,
+                      status: AlertStatus.CLOSED,
+                      closedAt: now,
+                      processRecords: [...(a.processRecords || []), alertProcessRecord],
+                    }
                   : a
               );
             }
@@ -263,8 +323,10 @@ export const useMonitorStore = create<MonitorState>()(
           }),
 
         addFeedback: (incidentId, reporter, content) =>
-          set((s) => ({
-            incidents: s.incidents.map((inc) =>
+          set((s) => {
+            const now = formatDateTime(new Date());
+            const targetIncident = s.incidents.find((i) => i.id === incidentId);
+            const updatedIncidents = s.incidents.map((inc) =>
               inc.id === incidentId
                 ? {
                     ...inc,
@@ -272,15 +334,38 @@ export const useMonitorStore = create<MonitorState>()(
                       ...inc.feedbacks,
                       {
                         id: `fb-${Date.now()}`,
-                        time: formatDateTime(new Date()),
+                        time: now,
                         reporter,
                         content,
                       },
                     ],
                   }
                 : inc
-            ),
-          })),
+            );
+
+            let updatedAlerts = s.alerts;
+            if (targetIncident?.alertId) {
+              const alertProcessRecord: AlertProcessRecord = {
+                time: now,
+                operator: reporter,
+                content: content,
+                type: "feedback",
+              };
+              updatedAlerts = s.alerts.map((a) =>
+                a.id === targetIncident.alertId
+                  ? {
+                      ...a,
+                      processRecords: [...(a.processRecords || []), alertProcessRecord],
+                    }
+                  : a
+              );
+            }
+
+            return {
+              incidents: updatedIncidents,
+              alerts: updatedAlerts,
+            };
+          }),
 
         createMaintenanceRecord: (record) =>
           set((s) => ({

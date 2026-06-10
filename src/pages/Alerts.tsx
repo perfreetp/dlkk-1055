@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Search,
@@ -50,8 +51,11 @@ import {
   formatDateTime,
   timeAgo,
 } from "@/utils/format";
+import { navigateToIncident, navigateToDevice } from "@/utils/navigate";
 
 const Alerts: React.FC = () => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     alerts,
     selectedTunnelId,
@@ -62,10 +66,32 @@ const Alerts: React.FC = () => {
     batchConfirmAlerts,
     createIncident,
     incidents,
+    devices,
   } = useMonitorStore();
 
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const id = searchParams.get("id");
+    if (id) {
+      const alert = alerts.find((a) => a.id === id);
+      if (alert) {
+        setSelectedAlert(alert);
+      }
+    } else {
+      setSelectedAlert(null);
+    }
+  }, [searchParams, alerts]);
+
+  const handleSelectAlert = (alert: Alert | null) => {
+    setSelectedAlert(alert);
+    if (alert) {
+      setSearchParams({ id: alert.id });
+    } else {
+      setSearchParams({});
+    }
+  };
   const [filters, setFilters] = useState({
     level: "all" as AlertLevel | "all",
     status: "all" as AlertStatus | "all",
@@ -767,7 +793,7 @@ const Alerts: React.FC = () => {
                 return (
                   <div
                     key={a.id}
-                    onClick={() => setSelectedAlert(a)}
+                    onClick={() => handleSelectAlert(a)}
                     className={cn(
                       "grid grid-cols-[40px_1fr_120px_100px_100px_110px_120px_160px_200px] gap-2 px-3 py-3 border-b border-border/20 items-center cursor-pointer transition-colors",
                       idx === 0 && "animate-slide-in-right",
@@ -878,7 +904,7 @@ const Alerts: React.FC = () => {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
-                        onClick={() => setSelectedAlert(a)}
+                        onClick={() => handleSelectAlert(a)}
                         className="btn btn-secondary !py-1 !px-2 text-[11px]"
                         title="查看详情"
                       >
@@ -888,7 +914,7 @@ const Alerts: React.FC = () => {
                         <>
                           <button
                             onClick={() => {
-                              setSelectedAlert(a);
+                              handleSelectAlert(a);
                               setShowConfirmModal(true);
                             }}
                             className="btn btn-primary !py-1 !px-2 text-[11px]"
@@ -898,7 +924,7 @@ const Alerts: React.FC = () => {
                           </button>
                           <button
                             onClick={() => {
-                              setSelectedAlert(a);
+                              handleSelectAlert(a);
                               setShowDispatchModal(true);
                             }}
                             className="btn btn-secondary !py-1 !px-2 text-[11px]"
@@ -999,7 +1025,7 @@ const Alerts: React.FC = () => {
                   <div
                     key={a.id}
                     className="flex gap-2.5 group cursor-pointer"
-                    onClick={() => setSelectedAlert(a)}
+                    onClick={() => handleSelectAlert(a)}
                   >
                     <div className="flex flex-col items-center">
                       <div
@@ -1044,7 +1070,7 @@ const Alerts: React.FC = () => {
         <>
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-            onClick={() => setSelectedAlert(null)}
+            onClick={() => handleSelectAlert(null)}
           />
           <div className="fixed top-0 right-0 bottom-0 w-[560px] bg-bg-card border-l border-border shadow-2xl z-50 flex flex-col animate-slide-in-right">
             <div className="p-4 border-b border-border/50 flex items-start justify-between shrink-0">
@@ -1061,7 +1087,7 @@ const Alerts: React.FC = () => {
                 </div>
               </div>
               <button
-                onClick={() => setSelectedAlert(null)}
+                onClick={() => handleSelectAlert(null)}
                 className="w-8 h-8 rounded flex items-center justify-center text-text-muted hover:bg-danger/20 hover:text-danger transition-colors"
               >
                 <X className="w-5 h-5" />
@@ -1217,16 +1243,27 @@ const Alerts: React.FC = () => {
                       </div>
                       <div className="flex flex-col items-end gap-2 shrink-0">
                         <FileWarning className="w-5 h-5 text-accent mt-0.5" />
-                        <button
-                          onClick={() => {
-                            console.log("打开处置单:", relatedIncident.id);
-                            window.location.hash = "#/incidents";
-                          }}
-                          className="btn btn-secondary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          打开处置单
-                        </button>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => {
+                              navigateToDevice(navigate, selectedAlert.deviceId);
+                            }}
+                            className="btn btn-secondary !py-1 !px-2 text-[11px] flex items-center gap-1"
+                            title="查看关联设备"
+                          >
+                            <Eye className="w-3 h-3" />
+                            设备
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigateToIncident(navigate, relatedIncident.id);
+                            }}
+                            className="btn btn-secondary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            打开处置单
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1315,7 +1352,7 @@ const Alerts: React.FC = () => {
                     {similarAlerts.map((sa) => (
                       <div
                         key={sa.id}
-                        onClick={() => setSelectedAlert(sa)}
+                        onClick={() => handleSelectAlert(sa)}
                         className="p-2.5 rounded-md bg-bg-elevated/40 border border-border/30 hover:border-accent/40 hover:bg-accent/5 cursor-pointer transition-colors"
                       >
                         <div className="flex items-center gap-2 mb-1">
